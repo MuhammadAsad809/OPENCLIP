@@ -417,12 +417,13 @@ class ProjectRepository(private val context: Context) {
                     val canvas = Canvas(lowerBmp)
                     val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
                         alpha = (upperLayer.opacity * 255).toInt().coerceIn(0, 255)
-                        xfermode = when (upperLayer.blendMode) {
-                            BlendMode.MULTIPLY -> PorterDuffXfermode(PorterDuff.Mode.MULTIPLY)
-                            BlendMode.SCREEN -> PorterDuffXfermode(PorterDuff.Mode.SCREEN)
-                            BlendMode.ADD -> PorterDuffXfermode(PorterDuff.Mode.ADD)
-                            BlendMode.OVERLAY -> PorterDuffXfermode(PorterDuff.Mode.OVERLAY)
-                            BlendMode.SRC_ATOP -> PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+                        xfermode = when {
+                            upperLayer.alphaLock -> PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+                            upperLayer.blendMode == BlendMode.MULTIPLY -> PorterDuffXfermode(PorterDuff.Mode.MULTIPLY)
+                            upperLayer.blendMode == BlendMode.SCREEN -> PorterDuffXfermode(PorterDuff.Mode.SCREEN)
+                            upperLayer.blendMode == BlendMode.OVERLAY -> PorterDuffXfermode(PorterDuff.Mode.OVERLAY)
+                            upperLayer.blendMode == BlendMode.DARKEN -> PorterDuffXfermode(PorterDuff.Mode.DARKEN)
+                            upperLayer.blendMode == BlendMode.LIGHTEN -> PorterDuffXfermode(PorterDuff.Mode.LIGHTEN)
                             else -> null
                         }
                     }
