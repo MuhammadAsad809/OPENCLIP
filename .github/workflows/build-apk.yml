@@ -1,4 +1,4 @@
-name: Build Vitre Downloader APK
+name: Build OpenClip Android APK
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build Native Android APK
+    name: Build OpenClip APK
     runs-on: ubuntu-latest
 
     steps:
@@ -23,23 +23,22 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Run Python Engine Tests
-        run: python3 -m unittest discover tests
-
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Run Unit Tests & Build Debug APK
-        run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
+      - name: Build Debug & Release APKs
+        run: ./gradlew assembleDebug assembleRelease --stacktrace
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: vitre-downloader-debug
+          name: openclip-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclip-release-apk
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: warn

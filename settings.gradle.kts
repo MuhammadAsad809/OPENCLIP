@@ -9,7 +9,6 @@ pluginManagement {
         }
         mavenCentral()
         gradlePluginPortal()
-        maven { url = java.net.URI("https://chaquo.com/maven") }
     }
 }
 
@@ -18,10 +17,9 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven { url = java.net.URI("https://chaquo.com/maven") }
         maven { url = java.net.URI("https://jitpack.io") }
     }
 }
 
-rootProject.name = "VitreDownloader"
+rootProject.name = "OpenClip"
 include(":app")

@@ -2,16 +2,14 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
-    id("com.google.devtools.ksp")
-    id("com.chaquo.python")
 }
 
 android {
-    namespace = "com.vitre.downloader"
+    namespace = "com.openclip.studio"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.vitre.downloader"
+        applicationId = "com.openclip.studio"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -20,10 +18,6 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
-        }
-
-        ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 
@@ -66,19 +60,8 @@ android {
     }
 }
 
-chaquopy {
-    defaultConfig {
-        version = "3.11"
-        pip {
-            install("yt-dlp")
-            install("requests")
-            install("mutagen")
-        }
-    }
-}
-
 dependencies {
-    // Core Android & Lifecycle
+    // AndroidX Core & Lifecycle
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
@@ -98,31 +81,9 @@ dependencies {
     // Navigation
     implementation("androidx.navigation:navigation-compose:2.8.5")
 
-    // Coil for Image/Thumbnail Loading
-    implementation("io.coil-kt:coil-compose:2.7.0")
-
-    // Room Database
-    val roomVersion = "2.6.1"
-    implementation("androidx.room:room-runtime:$roomVersion")
-    implementation("androidx.room:room-ktx:$roomVersion")
-    ksp("androidx.room:room-compiler:$roomVersion")
-
-    // DataStore Preferences
-    implementation("androidx.datastore:datastore-preferences:1.1.2")
-
-    // Storage Access Framework DocumentFile
-    implementation("androidx.documentfile:documentfile:1.0.1")
-
-    // Media3 ExoPlayer for Local Playback
+    // Media3 for Audio Playback & Sync
     val media3Version = "1.5.1"
     implementation("androidx.media3:media3-exoplayer:$media3Version")
-    implementation("androidx.media3:media3-ui:$media3Version")
-
-    // Media3 Transformer for Native Media Processing
-    implementation("androidx.media3:media3-transformer:$media3Version")
-
-    // Chrome Custom Tabs for trusted browser auth (Google blocks WebView sign-in)
-    implementation("androidx.browser:browser:1.8.0")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")

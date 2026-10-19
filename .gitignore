@@ -11,3 +11,8 @@ local.properties
 /app/build
 __pycache__/
 *.pyc
+
+# Analysis intermediate binary extraction dumps
+analysis/dex/
+analysis/extracted/
+analysis/jadx_out/
