@@ -40,7 +40,7 @@ import androidx.compose.ui.window.Dialog
 import com.openclip.studio.R
 import com.openclip.studio.ui.theme.AccentPrimary
 import com.openclip.studio.ui.theme.DarkBorder
-import com.openclip.studio.ui.theme.DarkCard
+import com.openclip.studio.ui.theme.DarkSurfaceVariant
 import com.openclip.studio.ui.theme.DarkSurface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -182,7 +182,7 @@ fun MagicCutDialog(
                             .fillMaxWidth()
                             .height(220.dp)
                             .clip(RoundedCornerShape(16.dp))
-                            .background(DarkCard)
+                            .background(DarkSurfaceVariant)
                             .border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
                             .clickable { imagePicker.launch("image/*") },
                         contentAlignment = Alignment.Center

@@ -6,7 +6,10 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import com.openclip.studio.core.model.BackgroundType
+import com.openclip.studio.core.model.BlendMode
 import com.openclip.studio.core.model.Layer
 import com.openclip.studio.core.model.Project
 import org.json.JSONArray
