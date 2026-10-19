@@ -874,7 +874,7 @@ fun FloatingBottomTimelineBar(
                     items(project.frameCount) { idx ->
                         val isSelected = idx == currentFrameIndex
                         val thumbBmp = remember(project.id, idx, project.updatedAt) {
-                            val f = repository.getFrameThumbnailFile(project.id, idx)
+                            val f = repository.getThumbnailFile(project.id, idx)
                             if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
                         }
 
@@ -1680,7 +1680,7 @@ fun ExportMovieDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    var format by remember { mutableStateOf(ExportFormat.MP4) }
+    var format by remember { mutableStateOf(ExportFormat.MP4_VIDEO) }
     var isExporting by remember { mutableStateOf(false) }
     var exportProgress by remember { mutableStateOf(0f) }
     var exportResultFile by remember { mutableStateOf<File?>(null) }
@@ -1701,7 +1701,7 @@ fun ExportMovieDialog(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            "Exporting ${format.name}... ${(exportProgress * 100).toInt()}%",
+                            "Exporting ${if (format == ExportFormat.MP4_VIDEO) "MP4" else "GIF"}... ${(exportProgress * 100).toInt()}%",
                             color = Color.White,
                             fontSize = 14.sp
                         )
@@ -1721,20 +1721,20 @@ fun ExportMovieDialog(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Button(
-                            onClick = { format = ExportFormat.MP4 },
+                            onClick = { format = ExportFormat.MP4_VIDEO },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (format == ExportFormat.MP4) AccentPrimary else Color(0xFF33333A)
+                                containerColor = if (format == ExportFormat.MP4_VIDEO) AccentPrimary else Color(0xFF33333A)
                             )
                         ) {
                             Text("MP4 Video", color = Color.White)
                         }
 
                         Button(
-                            onClick = { format = ExportFormat.GIF },
+                            onClick = { format = ExportFormat.ANIMATED_GIF },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (format == ExportFormat.GIF) AccentPrimary else Color(0xFF33333A)
+                                containerColor = if (format == ExportFormat.ANIMATED_GIF) AccentPrimary else Color(0xFF33333A)
                             )
                         ) {
                             Text("GIF Animation", color = Color.White)
@@ -1751,21 +1751,15 @@ fun ExportMovieDialog(
                     onClick = {
                         isExporting = true
                         coroutineScope.launch {
-                            val pipeline = ExportPipeline(context)
-                            val dest = File(context.getExternalFilesDir(null) ?: context.filesDir, "movies")
-                            dest.mkdirs()
-                            val ext = if (format == ExportFormat.MP4) "mp4" else "gif"
-                            val outFile = File(dest, "${project.title}_${System.currentTimeMillis()}.$ext")
-
-                            val success = pipeline.exportProject(
+                            val outFile = ExportPipeline.exportProject(
+                                context = context,
                                 project = project,
                                 repository = repository,
                                 format = format,
-                                outputFile = outFile,
                                 onProgress = { exportProgress = it }
                             )
                             isExporting = false
-                            if (success) {
+                            if (outFile != null) {
                                 exportResultFile = outFile
                             } else {
                                 Toast.makeText(context, "Export failed", Toast.LENGTH_SHORT).show()

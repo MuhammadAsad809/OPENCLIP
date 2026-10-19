@@ -160,7 +160,7 @@ fun ProjectCard(
     var menuExpanded by remember { mutableStateOf(false) }
 
     val thumbBmp = remember(project.id, project.updatedAt) {
-        val f = repository.getFrameThumbnailFile(project.id, 0)
+        val f = repository.getThumbnailFile(project.id, 0)
         if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
     }
 
