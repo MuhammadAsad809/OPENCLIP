@@ -191,6 +191,24 @@ class ProjectRepository(private val context: Context) {
         return out
     }
 
+    /**
+     * Composites ONLY the visible transparent layers of a frame.
+     * Crucial for Onion Skinning: NEVER draws background, preventing the canvas from turning pink/tinted!
+     */
+    fun getCompositedLayers(project: Project, frameIndex: Int): Bitmap {
+        val out = Bitmap.createBitmap(project.canvasWidth, project.canvasHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        for (layer in project.layers) {
+            if (layer.visible && layer.opacity > 0.001f) {
+                val layerBmp = loadLayerBitmap(project.id, frameIndex, layer.id, project.canvasWidth, project.canvasHeight)
+                paint.alpha = (layer.opacity.coerceIn(0f, 1f) * 255).toInt()
+                canvas.drawBitmap(layerBmp, 0f, 0f, paint)
+            }
+        }
+        return out
+    }
+
     private fun drawGrid(canvas: Canvas, w: Int, h: Int) {
         val gridPaint = Paint().apply {
             color = 0xFFE0E0E0.toInt()
@@ -347,6 +365,44 @@ class ProjectRepository(private val context: Context) {
             layers.add(Layer(0, "Layer 1"))
         }
 
+        val audioTracks = mutableListOf<com.openclip.studio.core.model.AudioTrack>()
+        val tracksArr = json.optJSONArray("audioTracks")
+        if (tracksArr != null) {
+            for (i in 0 until tracksArr.length()) {
+                val tJson = tracksArr.getJSONObject(i)
+                val clips = mutableListOf<com.openclip.studio.core.model.AudioClip>()
+                val clipsArr = tJson.optJSONArray("clips")
+                if (clipsArr != null) {
+                    for (j in 0 until clipsArr.length()) {
+                        val cJson = clipsArr.getJSONObject(j)
+                        clips.add(
+                            com.openclip.studio.core.model.AudioClip(
+                                id = cJson.optString("id", UUID.randomUUID().toString()),
+                                name = cJson.optString("name", "Audio"),
+                                filePath = cJson.optString("filePath", ""),
+                                startFrame = cJson.optInt("startFrame", 0),
+                                durationFrames = cJson.optInt("durationFrames", 24),
+                                volume = cJson.optDouble("volume", 1.0).toFloat(),
+                                muted = cJson.optBoolean("muted", false)
+                            )
+                        )
+                    }
+                }
+                audioTracks.add(
+                    com.openclip.studio.core.model.AudioTrack(
+                        id = tJson.optInt("id", i),
+                        name = tJson.optString("name", "Track ${i + 1}"),
+                        clips = clips,
+                        volume = tJson.optDouble("volume", 1.0).toFloat(),
+                        muted = tJson.optBoolean("muted", false)
+                    )
+                )
+            }
+        }
+        if (audioTracks.isEmpty()) {
+            audioTracks.add(com.openclip.studio.core.model.AudioTrack(0, "Track 1"))
+        }
+
         return Project(
             id = id,
             title = title,
@@ -357,6 +413,7 @@ class ProjectRepository(private val context: Context) {
             backgroundColor = backgroundColor,
             backgroundType = backgroundType,
             layers = layers,
+            audioTracks = audioTracks,
             createdAt = createdAt,
             updatedAt = updatedAt
         )
@@ -386,6 +443,88 @@ class ProjectRepository(private val context: Context) {
             layersArr.put(lObj)
         }
         json.put("layers", layersArr)
+
+        val tracksArr = JSONArray()
+        for (t in p.audioTracks) {
+            val tObj = JSONObject()
+            tObj.put("id", t.id)
+            tObj.put("name", t.name)
+            tObj.put("volume", t.volume.toDouble())
+            tObj.put("muted", t.muted)
+            val clipsArr = JSONArray()
+            for (c in t.clips) {
+                val cObj = JSONObject()
+                cObj.put("id", c.id)
+                cObj.put("name", c.name)
+                cObj.put("filePath", c.filePath)
+                cObj.put("startFrame", c.startFrame)
+                cObj.put("durationFrames", c.durationFrames)
+                cObj.put("volume", c.volume.toDouble())
+                cObj.put("muted", c.muted)
+                clipsArr.put(cObj)
+            }
+            tObj.put("clips", clipsArr)
+            tracksArr.put(tObj)
+        }
+        json.put("audioTracks", tracksArr)
+
         return json.toString(2)
+    }
+
+    fun getAudioDir(projectId: String): File {
+        return File(File(projectsDir, projectId), "audio").apply { if (!exists()) mkdirs() }
+    }
+
+    fun addAudioClip(projectId: String, trackId: Int, name: String, srcFile: File, startFrame: Int, durationFrames: Int): Project? {
+        val project = getProject(projectId) ?: return null
+        val audioDir = getAudioDir(projectId)
+        val ext = srcFile.extension.ifEmpty { "mp3" }
+        val destFile = File(audioDir, "clip_${System.currentTimeMillis()}.$ext")
+        srcFile.copyTo(destFile, overwrite = true)
+
+        val newClip = com.openclip.studio.core.model.AudioClip(
+            name = name,
+            filePath = destFile.absolutePath,
+            startFrame = startFrame,
+            durationFrames = durationFrames
+        )
+
+        var trackFound = false
+        val updatedTracks = project.audioTracks.map { track ->
+            if (track.id == trackId) {
+                trackFound = true
+                track.copy(clips = track.clips + newClip)
+            } else track
+        }.toMutableList()
+
+        if (!trackFound) {
+            updatedTracks.add(
+                com.openclip.studio.core.model.AudioTrack(
+                    id = trackId,
+                    name = "Track ${trackId + 1}",
+                    clips = listOf(newClip)
+                )
+            )
+        }
+
+        val updated = project.copy(audioTracks = updatedTracks, updatedAt = System.currentTimeMillis())
+        saveProject(updated)
+        return updated
+    }
+
+    fun deleteAudioClip(projectId: String, trackId: Int, clipId: String): Project? {
+        val project = getProject(projectId) ?: return null
+        val updatedTracks = project.audioTracks.map { track ->
+            if (track.id == trackId) {
+                val clipToRemove = track.clips.find { it.id == clipId }
+                if (clipToRemove != null) {
+                    try { File(clipToRemove.filePath).delete() } catch (e: Exception) {}
+                }
+                track.copy(clips = track.clips.filter { it.id != clipId })
+            } else track
+        }
+        val updated = project.copy(audioTracks = updatedTracks, updatedAt = System.currentTimeMillis())
+        saveProject(updated)
+        return updated
     }
 }

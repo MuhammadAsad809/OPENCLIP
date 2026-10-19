@@ -236,9 +236,15 @@ class EditorViewModel(
         repository.saveProject(updated)
     }
 
-    fun updateProjectFps(newFps: Int) {
-        val updated = _project.value.copy(fps = newFps.coerceIn(1, 30), updatedAt = System.currentTimeMillis())
-        _project.value = updated
-        repository.saveProject(updated)
+    fun setProject(project: Project) {
+        _project.value = project
+        repository.saveProject(project)
+    }
+
+    fun reloadProject() {
+        val proj = repository.getProject(_project.value.id)
+        if (proj != null) {
+            _project.value = proj
+        }
     }
 }

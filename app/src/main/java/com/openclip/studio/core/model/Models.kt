@@ -82,6 +82,24 @@ data class BrushConfig(
     val fillTolerance: Int = 32
 )
 
+data class AudioClip(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val filePath: String,
+    val startFrame: Int = 0,
+    val durationFrames: Int = 24,
+    val volume: Float = 1.0f,
+    val muted: Boolean = false
+)
+
+data class AudioTrack(
+    val id: Int,
+    val name: String = "Track 1",
+    val clips: List<AudioClip> = emptyList(),
+    val volume: Float = 1.0f,
+    val muted: Boolean = false
+)
+
 data class Project(
     val id: String = UUID.randomUUID().toString(),
     val title: String = "My Animation",
@@ -93,6 +111,9 @@ data class Project(
     val backgroundType: BackgroundType = BackgroundType.SOLID,
     val layers: List<Layer> = listOf(
         Layer(id = 0, name = "Layer 1", visible = true, locked = false, opacity = 1.0f)
+    ),
+    val audioTracks: List<AudioTrack> = listOf(
+        AudioTrack(id = 0, name = "Track 1")
     ),
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()

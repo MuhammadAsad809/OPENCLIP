@@ -2,7 +2,11 @@ package com.openclip.studio.ui.editor
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -89,6 +93,115 @@ fun EditorScreen(
     var showExportDialog by remember { mutableStateOf(false) }
     var showProjectSettingsDialog by remember { mutableStateOf(false) }
     var showGrid by remember { mutableStateOf(false) }
+    var showAudioEditor by remember { mutableStateOf(false) }
+    var showImageVideoSheet by remember { mutableStateOf(false) }
+    var isImportingVideo by remember { mutableStateOf(false) }
+    var importVideoProgress by remember { mutableStateOf(0f) }
+
+    // Media pickers
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val originalBitmap = BitmapFactory.decodeStream(stream)
+                    if (originalBitmap != null) {
+                        val active = canvasViewRef?.activeLayerBitmap ?: viewModel.repository.loadLayerBitmap(
+                            project.id, currentFrameIndex, activeLayerId, project.canvasWidth, project.canvasHeight
+                        )
+                        val canvas = android.graphics.Canvas(active)
+
+                        // Scale image to fit within canvas bounds preserving aspect ratio
+                        val srcW = originalBitmap.width.toFloat()
+                        val srcH = originalBitmap.height.toFloat()
+                        val scale = (project.canvasWidth.toFloat() / srcW).coerceAtMost(project.canvasHeight.toFloat() / srcH)
+                        val destW = (srcW * scale).toInt().coerceAtLeast(1)
+                        val destH = (srcH * scale).toInt().coerceAtLeast(1)
+                        val scaledBitmap = Bitmap.createScaledBitmap(originalBitmap, destW, destH, true)
+
+                        val left = (project.canvasWidth - destW) / 2f
+                        val top = (project.canvasHeight - destH) / 2f
+                        canvas.drawBitmap(scaledBitmap, left, top, null)
+
+                        viewModel.historyManager.pushState(active)
+                        viewModel.repository.saveLayerBitmap(project.id, currentFrameIndex, activeLayerId, active)
+                        viewModel.repository.updateFrameThumbnail(project, currentFrameIndex)
+                        canvasViewRef?.invalidate()
+                        frameRevision++
+                        Toast.makeText(context, "Image added to current frame", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Failed to load image: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val videoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch {
+                isImportingVideo = true
+                importVideoProgress = 0f
+                try {
+                    val retriever = MediaMetadataRetriever()
+                    retriever.setDataSource(context, uri)
+                    val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    val durationMs = durationStr?.toLongOrNull() ?: 3000L
+                    val fps = project.fps.coerceIn(1, 30)
+                    val frameIntervalMs = 1000L / fps
+                    val maxFrames = 60
+                    val framesToExtract = ((durationMs / frameIntervalMs).toInt()).coerceIn(1, maxFrames)
+
+                    var currentProj = project
+                    for (i in 0 until framesToExtract) {
+                        val timeUs = (i * frameIntervalMs) * 1000L
+                        val frameBmp = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                        if (frameBmp != null) {
+                            val scaled = Bitmap.createScaledBitmap(frameBmp, project.canvasWidth, project.canvasHeight, true)
+                            val targetFrame = currentFrameIndex + i
+                            if (targetFrame >= currentProj.frameCount) {
+                                currentProj = viewModel.repository.insertFrame(currentProj, targetFrame)
+                            }
+                            viewModel.repository.saveLayerBitmap(currentProj.id, targetFrame, activeLayerId, scaled)
+                            viewModel.repository.updateFrameThumbnail(currentProj, targetFrame)
+                        }
+                        importVideoProgress = (i + 1).toFloat() / framesToExtract
+                    }
+                    retriever.release()
+                    viewModel.setProject(currentProj)
+                    frameRevision++
+                    Toast.makeText(context, "Imported $framesToExtract frames from video", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Failed to import video: ${e.message}", Toast.LENGTH_SHORT).show()
+                } finally {
+                    isImportingVideo = false
+                }
+            }
+        }
+    }
+
+    if (showAudioEditor) {
+        AudioEditorScreen(
+            project = project,
+            currentFrameIndex = currentFrameIndex,
+            repository = viewModel.repository,
+            onDismiss = {
+                showAudioEditor = false
+                viewModel.reloadProject()
+                frameRevision++
+            },
+            onFrameChanged = { newIdx ->
+                viewModel.selectFrame(newIdx)
+            },
+            onProjectUpdated = { updatedProj ->
+                viewModel.setProject(updatedProj)
+            }
+        )
+        return
+    }
 
     // Canvas view reference & revision counter
     var canvasViewRef by remember { mutableStateOf<DrawingCanvasView?>(null) }
@@ -134,37 +247,38 @@ fun EditorScreen(
         list
     }
 
-    // Onion skin bitmaps
-    val onionBeforeBmps = remember(project.id, currentFrameIndex, onionConfig, frameRevision) {
+    // Onion skin bitmaps (only when not playing, and using getCompositedLayers to avoid pink tinted backgrounds!)
+    val onionBeforeBmps = remember(project.id, currentFrameIndex, onionConfig, frameRevision, isPlaying) {
         val list = mutableListOf<Bitmap>()
-        if (onionConfig.enabled && currentFrameIndex > 0) {
+        if (!isPlaying && onionConfig.enabled && currentFrameIndex > 0) {
             val count = onionConfig.framesBefore.coerceAtMost(currentFrameIndex)
             for (offset in 1..count) {
-                list.add(viewModel.repository.getCompositedFrame(project, currentFrameIndex - offset))
+                list.add(viewModel.repository.getCompositedLayers(project, currentFrameIndex - offset))
             }
         }
         list
     }
 
-    val onionAfterBmps = remember(project.id, currentFrameIndex, onionConfig, frameRevision) {
+    val onionAfterBmps = remember(project.id, currentFrameIndex, onionConfig, frameRevision, isPlaying) {
         val list = mutableListOf<Bitmap>()
-        if (onionConfig.enabled && currentFrameIndex < project.frameCount - 1) {
+        if (!isPlaying && onionConfig.enabled && currentFrameIndex < project.frameCount - 1) {
             val count = onionConfig.framesAfter.coerceAtMost(project.frameCount - 1 - currentFrameIndex)
             for (offset in 1..count) {
-                list.add(viewModel.repository.getCompositedFrame(project, currentFrameIndex + offset))
+                list.add(viewModel.repository.getCompositedLayers(project, currentFrameIndex + offset))
             }
         }
         list
     }
 
     // Sync state with Canvas view
-    LaunchedEffect(activeBmp, bgBmps, fgBmps, onionBeforeBmps, onionAfterBmps, brushConfig, onionConfig, project) {
+    LaunchedEffect(activeBmp, bgBmps, fgBmps, onionBeforeBmps, onionAfterBmps, brushConfig, onionConfig, project, isPlaying) {
         canvasViewRef?.let { cv ->
             cv.currentProject = project
             cv.currentFrameIndex = currentFrameIndex
             cv.activeLayerId = activeLayerId
             cv.brushConfig = brushConfig
             cv.onionConfig = onionConfig
+            cv.isPlaying = isPlaying
             cv.activeLayerBitmap = activeBmp
             cv.backgroundLayerBitmaps = bgBmps
             cv.foregroundLayerBitmaps = fgBmps
@@ -244,10 +358,10 @@ fun EditorScreen(
                     }
                 },
                 onImageVideo = {
-                    Toast.makeText(context, "Import Image/Video to Frame", Toast.LENGTH_SHORT).show()
+                    showImageVideoSheet = true
                 },
                 onAddAudio = {
-                    Toast.makeText(context, "Audio Studio: Add audio tracks & music", Toast.LENGTH_SHORT).show()
+                    showAudioEditor = true
                 }
             )
         },
@@ -521,6 +635,47 @@ fun EditorScreen(
                 showProjectSettingsDialog = false
             }
         )
+    }
+
+    // IMAGE & VIDEO IMPORT SHEET
+    if (showImageVideoSheet) {
+        ImageVideoImportBottomSheet(
+            onDismiss = { showImageVideoSheet = false },
+            onImportImage = {
+                imagePickerLauncher.launch("image/*")
+            },
+            onImportVideo = {
+                videoPickerLauncher.launch("video/*")
+            }
+        )
+    }
+
+    // VIDEO IMPORT PROGRESS DIALOG
+    if (isImportingVideo) {
+        Dialog(onDismissRequest = {}) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = DarkSurface,
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    CircularProgressIndicator(color = AccentPrimary)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Importing video frames...", color = Color.White, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { importVideoProgress },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = AccentPrimary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("${(importVideoProgress * 100).toInt()}%", color = TextSecondary, fontSize = 12.sp)
+                }
+            }
+        }
     }
 }
 
@@ -1848,4 +2003,139 @@ fun ProjectSettingsDialog(
             }
         }
     )
+}
+
+/**
+ * Image & Video Import Bottom Sheet matching FlipaClip styling
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ImageVideoImportBottomSheet(
+    onDismiss: () -> Unit,
+    onImportImage: () -> Unit,
+    onImportVideo: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF222226),
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 12.dp)
+                .padding(bottom = 24.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .padding(bottom = 16.dp)
+                    .width(40.dp)
+                    .height(4.dp)
+                    .background(Color(0xFF44444A), RoundedCornerShape(2.dp))
+            )
+
+            Text(
+                text = "Insert Media",
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Option 1: Add Image
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        onDismiss()
+                        onImportImage()
+                    },
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF2C2C32)
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(AccentPrimary.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_stage_image_video),
+                            contentDescription = "Image",
+                            tint = AccentPrimary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column {
+                        Text(
+                            text = "Add Image",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Insert picture onto current frame & active layer",
+                            color = TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Option 2: Add Video
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        onDismiss()
+                        onImportVideo()
+                    },
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF2C2C32)
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF34C759).copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_stage_play),
+                            contentDescription = "Video",
+                            tint = Color(0xFF34C759),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column {
+                        Text(
+                            text = "Add Video",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Extract video frames directly into your animation timeline",
+                            color = TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
 }

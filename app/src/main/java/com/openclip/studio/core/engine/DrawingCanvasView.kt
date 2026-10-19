@@ -50,6 +50,7 @@ class DrawingCanvasView @JvmOverloads constructor(
     // Configs
     var brushConfig: BrushConfig = BrushConfig()
     var onionConfig: OnionConfig = OnionConfig()
+    var isPlaying: Boolean = false
 
     // Bitmaps
     var activeLayerBitmap: Bitmap? = null
@@ -186,8 +187,8 @@ class DrawingCanvasView @JvmOverloads constructor(
         // 2. Draw canvas paper background
         drawCanvasBackground(canvas)
 
-        // 3. Draw Onion Skin (Past frames in Red tint)
-        if (onionConfig.enabled && onionBeforeBitmaps.isNotEmpty()) {
+        // 3. Draw Onion Skin (Past frames in Red tint) - ONLY when not playing
+        if (!isPlaying && onionConfig.enabled && onionBeforeBitmaps.isNotEmpty()) {
             val step = if (onionBeforeBitmaps.size > 1) {
                 (onionConfig.startOpacity - onionConfig.endOpacity) / (onionBeforeBitmaps.size - 1)
             } else 0f
@@ -196,7 +197,7 @@ class DrawingCanvasView @JvmOverloads constructor(
                 val alpha = (onionConfig.startOpacity - i * step).coerceIn(0.05f, 0.9f)
                 onionBeforePaint.alpha = (alpha * 255).toInt()
                 if (onionConfig.coloredOnion) {
-                    onionBeforePaint.colorFilter = PorterDuffColorFilter(0x80FF2020.toInt(), PorterDuff.Mode.SRC_ATOP)
+                    onionBeforePaint.colorFilter = PorterDuffColorFilter(0xFFFF3333.toInt(), PorterDuff.Mode.SRC_IN)
                 } else {
                     onionBeforePaint.colorFilter = null
                 }
@@ -204,8 +205,8 @@ class DrawingCanvasView @JvmOverloads constructor(
             }
         }
 
-        // 4. Draw Onion Skin (Future frames in Green tint)
-        if (onionConfig.enabled && onionAfterBitmaps.isNotEmpty()) {
+        // 4. Draw Onion Skin (Future frames in Green tint) - ONLY when not playing
+        if (!isPlaying && onionConfig.enabled && onionAfterBitmaps.isNotEmpty()) {
             val step = if (onionAfterBitmaps.size > 1) {
                 (onionConfig.startOpacity - onionConfig.endOpacity) / (onionAfterBitmaps.size - 1)
             } else 0f
@@ -214,7 +215,7 @@ class DrawingCanvasView @JvmOverloads constructor(
                 val alpha = (onionConfig.startOpacity - i * step).coerceIn(0.05f, 0.9f)
                 onionAfterPaint.alpha = (alpha * 255).toInt()
                 if (onionConfig.coloredOnion) {
-                    onionAfterPaint.colorFilter = PorterDuffColorFilter(0x8020DF40.toInt(), PorterDuff.Mode.SRC_ATOP)
+                    onionAfterPaint.colorFilter = PorterDuffColorFilter(0xFF33DD55.toInt(), PorterDuff.Mode.SRC_IN)
                 } else {
                     onionAfterPaint.colorFilter = null
                 }
