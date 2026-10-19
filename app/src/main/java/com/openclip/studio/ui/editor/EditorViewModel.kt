@@ -2,12 +2,15 @@ package com.openclip.studio.ui.editor
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.openclip.studio.core.engine.HistoryManager
 import com.openclip.studio.core.export.ExportFormat
 import com.openclip.studio.core.export.ExportPipeline
+import com.openclip.studio.core.model.BackgroundType
 import com.openclip.studio.core.model.BrushConfig
+import com.openclip.studio.core.model.GridConfig
 import com.openclip.studio.core.model.Layer
 import com.openclip.studio.core.model.MirrorMode
 import com.openclip.studio.core.model.OnionConfig
@@ -231,6 +234,16 @@ class EditorViewModel(
         repository.saveProject(updated)
     }
 
+    fun mergeLayerDown(layerId: Int) {
+        val proj = _project.value
+        val idx = proj.layers.indexOfFirst { it.id == layerId }
+        if (idx <= 0) return
+        val targetLayerId = proj.layers[idx - 1].id
+        val updated = repository.mergeLayerDown(proj, layerId)
+        _project.value = updated
+        _activeLayerId.value = targetLayerId
+    }
+
     fun setMirrorMode(mode: MirrorMode) {
         _brushConfig.value = _brushConfig.value.copy(mirrorMode = mode)
     }
@@ -256,6 +269,133 @@ class EditorViewModel(
         val updated = _project.value.copy(title = newTitle, updatedAt = System.currentTimeMillis())
         _project.value = updated
         repository.saveProject(updated)
+    }
+
+    fun updateProjectSettings(
+        title: String,
+        fps: Int,
+        canvasWidth: Int,
+        canvasHeight: Int,
+        bgType: BackgroundType,
+        bgColor: Int,
+        flipH: Boolean,
+        rotation: Float
+    ) {
+        val updated = _project.value.copy(
+            title = title,
+            fps = fps.coerceIn(1, 60),
+            canvasWidth = canvasWidth,
+            canvasHeight = canvasHeight,
+            backgroundType = bgType,
+            backgroundColor = bgColor,
+            canvasFlipH = flipH,
+            canvasRotation = rotation,
+            updatedAt = System.currentTimeMillis()
+        )
+        _project.value = updated
+        repository.saveProject(updated)
+    }
+
+    fun updateGridConfig(config: GridConfig) {
+        val updated = _project.value.copy(
+            gridConfig = config,
+            updatedAt = System.currentTimeMillis()
+        )
+        _project.value = updated
+        repository.saveProject(updated)
+    }
+
+    fun updateLayer(layer: Layer) {
+        val updatedLayers = _project.value.layers.map {
+            if (it.id == layer.id) layer else it
+        }
+        val updated = _project.value.copy(
+            layers = updatedLayers,
+            updatedAt = System.currentTimeMillis()
+        )
+        _project.value = updated
+        repository.saveProject(updated)
+    }
+
+    fun addFrameAfter(index: Int) {
+        stopPlayback()
+        val insertAt = (index + 1).coerceIn(0, _project.value.frameCount)
+        val updated = repository.insertFrame(_project.value, insertAt)
+        _project.value = updated
+        _currentFrameIndex.value = insertAt
+        historyManager.clear()
+    }
+
+    fun addFrameBefore(index: Int) {
+        stopPlayback()
+        val insertAt = index.coerceIn(0, _project.value.frameCount)
+        val updated = repository.insertFrame(_project.value, insertAt)
+        _project.value = updated
+        _currentFrameIndex.value = insertAt
+        historyManager.clear()
+    }
+
+    fun addBetweenAllFrames() {
+        stopPlayback()
+        val updated = repository.addBetweenAllFrames(_project.value)
+        _project.value = updated
+        historyManager.clear()
+    }
+
+    fun duplicateFrames(indices: List<Int>) {
+        stopPlayback()
+        val updated = repository.duplicateFrames(_project.value, indices)
+        _project.value = updated
+        historyManager.clear()
+    }
+
+    fun deleteFrames(indices: List<Int>) {
+        stopPlayback()
+        val updated = repository.deleteFrames(_project.value, indices)
+        _project.value = updated
+        _currentFrameIndex.value = _currentFrameIndex.value.coerceIn(0, updated.frameCount - 1)
+        historyManager.clear()
+    }
+
+    fun moveFrame(fromIndex: Int, toIndex: Int) {
+        stopPlayback()
+        val updated = repository.moveFrame(_project.value, fromIndex, toIndex)
+        _project.value = updated
+        _currentFrameIndex.value = toIndex
+        historyManager.clear()
+    }
+
+    fun loadFrameThumbnails(): Map<Int, Bitmap> {
+        val result = mutableMapOf<Int, Bitmap>()
+        val proj = _project.value
+        for (i in 0 until proj.frameCount) {
+            val thumbFile = repository.getThumbnailFile(proj.id, i)
+            if (thumbFile.exists() && thumbFile.length() > 0) {
+                val bmp = BitmapFactory.decodeFile(thumbFile.absolutePath)
+                if (bmp != null) result[i] = bmp
+            }
+        }
+        return result
+    }
+
+    fun importRotoscopedBitmaps(bitmaps: List<Bitmap>) {
+        stopPlayback()
+        var cur = _project.value
+        val curIndex = _currentFrameIndex.value
+        val activeLayer = _activeLayerId.value
+        for ((idx, bmp) in bitmaps.withIndex()) {
+            val targetFrame = curIndex + idx
+            if (targetFrame < cur.frameCount) {
+                repository.saveLayerBitmap(cur.id, targetFrame, activeLayer, bmp)
+                repository.updateFrameThumbnail(cur, targetFrame)
+            } else {
+                cur = repository.insertFrame(cur, targetFrame)
+                repository.saveLayerBitmap(cur.id, targetFrame, activeLayer, bmp)
+                repository.updateFrameThumbnail(cur, targetFrame)
+            }
+        }
+        _project.value = cur
+        historyManager.clear()
     }
 
     fun setProject(project: Project) {

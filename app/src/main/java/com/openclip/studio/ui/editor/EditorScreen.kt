@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
@@ -58,6 +59,7 @@ import com.openclip.studio.ui.theme.*
 import com.openclip.studio.ui.toolkit.AnimationToolkitDialog
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.FileOutputStream
 
 val CaveatFont = FontFamily(
     Font(R.font.caveat_regular, FontWeight.Normal)
@@ -100,6 +102,14 @@ fun EditorScreen(
     var showOnionDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var showProjectSettingsDialog by remember { mutableStateOf(false) }
+    var showFramesViewerDialog by remember { mutableStateOf(false) }
+    var showGridSettingsDialog by remember { mutableStateOf(false) }
+    var showLayerSettingsDialog by remember { mutableStateOf(false) }
+    var selectedLayerForSettings by remember { mutableStateOf<Layer?>(null) }
+    var showMagicCutDialog by remember { mutableStateOf(false) }
+    var showImportVideoDialog by remember { mutableStateOf(false) }
+    var showFrameContextMenu by remember { mutableStateOf(false) }
+    var contextMenuFrameIndex by remember { mutableStateOf(0) }
     var showGrid by remember { mutableStateOf(false) }
     var showAudioEditor by remember { mutableStateOf(false) }
     var showImageVideoSheet by remember { mutableStateOf(false) }
@@ -197,6 +207,31 @@ fun EditorScreen(
                     Toast.makeText(context, "Failed to import video: ${e.message}", Toast.LENGTH_SHORT).show()
                 } finally {
                     isImportingVideo = false
+                }
+            }
+        }
+    }
+
+    val projectImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch {
+                try {
+                    val tempFile = File(context.cacheDir, "import_temp.zip")
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(tempFile).use { output -> input.copyTo(output) }
+                    }
+                    val imported = viewModel.repository.importProjectPackage(tempFile)
+                    if (imported != null) {
+                        viewModel.setProject(imported)
+                        frameRevision++
+                        Toast.makeText(context, "Project '${imported.title}' imported!", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Failed to import project package", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Import failed: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -594,7 +629,12 @@ fun EditorScreen(
                     frameRevision++
                 },
                 onTogglePlay = { viewModel.togglePlayback() },
-                onOpenLayers = { showLayerSheet = true }
+                onOpenLayers = { showLayerSheet = true },
+                onOpenFramesViewer = { showFramesViewerDialog = true },
+                onFrameLongClick = { idx ->
+                    contextMenuFrameIndex = idx
+                    showFrameContextMenu = true
+                }
             )
         }
     }
@@ -603,11 +643,15 @@ fun EditorScreen(
     if (showStageSettingsSheet) {
         StageSettingsBottomSheet(
             onionEnabled = onionConfig.enabled,
-            gridEnabled = showGrid,
+            gridEnabled = project.gridConfig.enabled,
             onDismiss = { showStageSettingsSheet = false },
             onProjectSettings = {
                 showStageSettingsSheet = false
                 showProjectSettingsDialog = true
+            },
+            onFramesViewer = {
+                showStageSettingsSheet = false
+                showFramesViewerDialog = true
             },
             onToggleOnion = { enabled ->
                 viewModel.setOnionEnabled(enabled)
@@ -617,13 +661,55 @@ fun EditorScreen(
                 showOnionDialog = true
             },
             onToggleGrid = { enabled ->
-                showGrid = enabled
+                viewModel.updateGridConfig(project.gridConfig.copy(enabled = enabled))
                 Toast.makeText(context, if (enabled) "Grid Enabled" else "Grid Disabled", Toast.LENGTH_SHORT).show()
+            },
+            onEditGrid = {
+                showStageSettingsSheet = false
+                showGridSettingsDialog = true
             },
             onMagicCut = {
                 showStageSettingsSheet = false
-                viewModel.setToolType(ToolType.LASSO)
-                Toast.makeText(context, "Magic Cut: Draw lasso around object to cut", Toast.LENGTH_LONG).show()
+                showMagicCutDialog = true
+            },
+            onAddImage = {
+                showStageSettingsSheet = false
+                imagePickerLauncher.launch("image/*")
+            },
+            onAddVideo = {
+                showStageSettingsSheet = false
+                showImportVideoDialog = true
+            },
+            onExportProject = {
+                showStageSettingsSheet = false
+                coroutineScope.launch {
+                    try {
+                        val exportDir = File(context.cacheDir, "exports").apply { if (!exists()) mkdirs() }
+                        val targetZip = File(exportDir, "${project.title.replace(' ', '_')}.openclip")
+                        val success = viewModel.repository.exportProjectPackage(project.id, targetZip)
+                        if (success && targetZip.exists()) {
+                            val uri = androidx.core.content.FileProvider.getUriForFile(
+                                context,
+                                "${context.packageName}.fileprovider",
+                                targetZip
+                            )
+                            val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "application/zip"
+                                putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            context.startActivity(android.content.Intent.createChooser(shareIntent, "Share Project Package"))
+                        } else {
+                            Toast.makeText(context, "Export package failed", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Export error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onImportProject = {
+                showStageSettingsSheet = false
+                projectImportLauncher.launch("*/*")
             },
             onMakeMovie = {
                 showStageSettingsSheet = false
@@ -773,16 +859,151 @@ fun EditorScreen(
             onDeleteLayer = {
                 viewModel.deleteLayer(it)
                 frameRevision++
+            },
+            onOpenLayerSettings = { layer ->
+                showLayerSheet = false
+                selectedLayerForSettings = layer
+                showLayerSettingsDialog = true
+            }
+        )
+    }
+
+    // LAYER SETTINGS & FX DIALOG
+    if (showLayerSettingsDialog && selectedLayerForSettings != null) {
+        val targetLayer = selectedLayerForSettings!!
+        val layerIdx = project.layers.indexOfFirst { it.id == targetLayer.id }
+        val canMerge = layerIdx > 0
+        LayerSettingsDialog(
+            layer = targetLayer,
+            canMergeDown = canMerge,
+            onDismiss = { showLayerSettingsDialog = false },
+            onMergeDown = {
+                viewModel.mergeLayerDown(targetLayer.id)
+                showLayerSettingsDialog = false
+                frameRevision++
+                Toast.makeText(context, "Merged down with layer below", Toast.LENGTH_SHORT).show()
+            },
+            onSaveLayer = { updated ->
+                viewModel.updateLayer(updated)
+                showLayerSettingsDialog = false
+                frameRevision++
+            }
+        )
+    }
+
+    // FLIPACLIP MAGIC CUT DIALOG
+    if (showMagicCutDialog) {
+        MagicCutDialog(
+            canvasWidth = project.canvasWidth,
+            canvasHeight = project.canvasHeight,
+            onDismiss = { showMagicCutDialog = false },
+            onCutoutReady = { cutoutBmp ->
+                val active = canvasViewRef?.activeLayerBitmap ?: viewModel.repository.loadLayerBitmap(
+                    project.id, currentFrameIndex, activeLayerId, project.canvasWidth, project.canvasHeight
+                )
+                val canvas = android.graphics.Canvas(active)
+
+                // Scale image to fit within canvas bounds preserving aspect ratio
+                val srcW = cutoutBmp.width.toFloat()
+                val srcH = cutoutBmp.height.toFloat()
+                val scale = (project.canvasWidth.toFloat() / srcW).coerceAtMost(project.canvasHeight.toFloat() / srcH) * 0.8f
+                val destW = (srcW * scale).toInt().coerceAtLeast(1)
+                val destH = (srcH * scale).toInt().coerceAtLeast(1)
+                val scaledBitmap = Bitmap.createScaledBitmap(cutoutBmp, destW, destH, true)
+
+                val left = (project.canvasWidth - destW) / 2f
+                val top = (project.canvasHeight - destH) / 2f
+                canvas.drawBitmap(scaledBitmap, left, top, null)
+
+                viewModel.historyManager.pushState(active)
+                viewModel.repository.saveLayerBitmap(project.id, currentFrameIndex, activeLayerId, active)
+                viewModel.repository.updateFrameThumbnail(project, currentFrameIndex)
+                canvasViewRef?.invalidate()
+                frameRevision++
+                Toast.makeText(context, "Magic Cut sticker stamped onto frame", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    // FULL SCREEN FRAMES VIEWER GRID
+    if (showFramesViewerDialog) {
+        val thumbs = remember(frameRevision, currentFrameIndex) { viewModel.loadFrameThumbnails() }
+        FramesViewerDialog(
+            project = project,
+            currentFrameIndex = currentFrameIndex,
+            frameThumbnails = thumbs,
+            onDismiss = { showFramesViewerDialog = false },
+            onSelectFrame = { idx ->
+                viewModel.selectFrame(idx)
+                showFramesViewerDialog = false
+            },
+            onAddFrameAfter = { idx ->
+                viewModel.addFrameAfter(idx)
+                frameRevision++
+            },
+            onAddFrameBefore = { idx ->
+                viewModel.addFrameBefore(idx)
+                frameRevision++
+            },
+            onAddBetweenAllFrames = {
+                viewModel.addBetweenAllFrames()
+                frameRevision++
+            },
+            onDuplicateFrames = { list ->
+                viewModel.duplicateFrames(list)
+                frameRevision++
+            },
+            onDeleteFrames = { list ->
+                viewModel.deleteFrames(list)
+                frameRevision++
+            },
+            onMoveFrame = { from, to ->
+                viewModel.moveFrame(from, to)
+                frameRevision++
+            },
+            onShareFrame = { frameIdx ->
+                try {
+                    val bmp = viewModel.repository.getCompositedFrame(project, frameIdx)
+                    val cacheFile = File(context.cacheDir, "frame_${frameIdx + 1}.png")
+                    FileOutputStream(cacheFile).use { out ->
+                        bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+                    }
+                    val uri = androidx.core.content.FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        cacheFile
+                    )
+                    val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "image/png"
+                        putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(android.content.Intent.createChooser(shareIntent, "Share Frame ${frameIdx + 1}"))
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Share failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+
+    // GRID & GUIDES SETTINGS DIALOG
+    if (showGridSettingsDialog) {
+        GridSettingsDialog(
+            config = project.gridConfig,
+            onDismiss = { showGridSettingsDialog = false },
+            onSaveConfig = {
+                viewModel.updateGridConfig(it)
+                showGridSettingsDialog = false
             }
         )
     }
 
     // ONION SKIN SETTINGS DIALOG
     if (showOnionDialog) {
-        OnionSkinDialog(
+        OnionSettingsDialog(
             config = onionConfig,
             onDismiss = { showOnionDialog = false },
-            onSave = {
+            onSaveConfig = {
                 viewModel.updateOnionConfig(it)
                 showOnionDialog = false
             }
@@ -798,14 +1019,155 @@ fun EditorScreen(
         )
     }
 
-    // PROJECT SETTINGS DIALOG
+    // PROJECT SETTINGS DIALOG (Canvas Presets, FPS Bouncing Ball, Background Texture)
     if (showProjectSettingsDialog) {
         ProjectSettingsDialog(
             project = project,
             onDismiss = { showProjectSettingsDialog = false },
-            onSave = { updated ->
-                viewModel.repository.saveProject(updated)
+            onSaveSettings = { title, fps, width, height, bgType, bgColor, flipH, rot ->
+                viewModel.updateProjectSettings(title, fps, width, height, bgType, bgColor, flipH, rot)
                 showProjectSettingsDialog = false
+                frameRevision++
+            }
+        )
+    }
+
+    // ROTOSCOPING VIDEO IMPORT DIALOG
+    if (showImportVideoDialog) {
+        ImportVideoDialog(
+            canvasWidth = project.canvasWidth,
+            canvasHeight = project.canvasHeight,
+            onDismiss = { showImportVideoDialog = false },
+            onFramesExtracted = { frames ->
+                viewModel.importRotoscopedBitmaps(frames)
+                showImportVideoDialog = false
+                frameRevision++
+                Toast.makeText(context, "Imported ${frames.size} frames from video", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    // TIMELINE FRAME CONTEXT MENU
+    if (showFrameContextMenu) {
+        AlertDialog(
+            onDismissRequest = { showFrameContextMenu = false },
+            containerColor = Color(0xFF22222A),
+            title = {
+                Text(
+                    text = "Frame ${contextMenuFrameIndex + 1} Options",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    TextButton(
+                        onClick = {
+                            showFrameContextMenu = false
+                            viewModel.addFrameBefore(contextMenuFrameIndex)
+                            frameRevision++
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Add Frame Left (Before)", color = Color.White)
+                    }
+                    TextButton(
+                        onClick = {
+                            showFrameContextMenu = false
+                            viewModel.addFrameAfter(contextMenuFrameIndex)
+                            frameRevision++
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Add Frame Right (After)", color = Color.White)
+                    }
+                    TextButton(
+                        onClick = {
+                            showFrameContextMenu = false
+                            copiedFrameBitmap = viewModel.repository.loadLayerBitmap(
+                                project.id, contextMenuFrameIndex, activeLayerId, project.canvasWidth, project.canvasHeight
+                            )
+                            Toast.makeText(context, "Frame ${contextMenuFrameIndex + 1} copied", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Copy Frame", color = AccentPrimary)
+                    }
+                    if (copiedFrameBitmap != null) {
+                        TextButton(
+                            onClick = {
+                                showFrameContextMenu = false
+                                viewModel.addFrameBefore(contextMenuFrameIndex)
+                                viewModel.repository.saveLayerBitmap(
+                                    project.id, contextMenuFrameIndex, activeLayerId, copiedFrameBitmap!!
+                                )
+                                viewModel.repository.updateFrameThumbnail(project, contextMenuFrameIndex)
+                                frameRevision++
+                                Toast.makeText(context, "Pasted left", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Paste Left", color = Color(0xFF64D2FF))
+                        }
+                        TextButton(
+                            onClick = {
+                                showFrameContextMenu = false
+                                viewModel.addFrameAfter(contextMenuFrameIndex)
+                                val newIndex = contextMenuFrameIndex + 1
+                                viewModel.repository.saveLayerBitmap(
+                                    project.id, newIndex, activeLayerId, copiedFrameBitmap!!
+                                )
+                                viewModel.repository.updateFrameThumbnail(project, newIndex)
+                                frameRevision++
+                                Toast.makeText(context, "Pasted right", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Paste Right", color = Color(0xFF64D2FF))
+                        }
+                    }
+                    TextButton(
+                        onClick = {
+                            showFrameContextMenu = false
+                            targetHoldFrameIndex = contextMenuFrameIndex
+                            showFrameHoldDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Set Hold Duration...", color = Color(0xFFFFB300))
+                    }
+                    TextButton(
+                        onClick = {
+                            showFrameContextMenu = false
+                            showFramesViewerDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Open Frames Viewer Grid", color = Color.White)
+                    }
+                    if (project.frameCount > 1) {
+                        TextButton(
+                            onClick = {
+                                showFrameContextMenu = false
+                                viewModel.deleteFrames(listOf(contextMenuFrameIndex))
+                                frameRevision++
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Delete Frame", color = Color(0xFFFF453A))
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showFrameContextMenu = false }) {
+                    Text("Close", color = TextSecondary)
+                }
             }
         )
     }
@@ -1254,7 +1616,9 @@ fun FloatingBottomTimelineBar(
     onFrameHoldClick: (Int) -> Unit = {},
     onAddFrame: () -> Unit,
     onTogglePlay: () -> Unit,
-    onOpenLayers: () -> Unit
+    onOpenLayers: () -> Unit,
+    onOpenFramesViewer: () -> Unit = {},
+    onFrameLongClick: (Int) -> Unit = {}
 ) {
     Surface(
         modifier = modifier
@@ -1329,8 +1693,15 @@ fun FloatingBottomTimelineBar(
                                     color = if (isSelected) AccentPrimary else Color(0xFF44444C),
                                     shape = RoundedCornerShape(14.dp)
                                 )
-                                .clickable {
-                                    if (isSelected) onFrameHoldClick(idx) else onSelectFrame(idx)
+                                .pointerInput(idx, isSelected) {
+                                    detectTapGestures(
+                                        onTap = {
+                                            if (isSelected) onFrameHoldClick(idx) else onSelectFrame(idx)
+                                        },
+                                        onLongPress = {
+                                            onFrameLongClick(idx)
+                                        }
+                                    )
                                 }
                         ) {
                             if (thumbBmp != null) {
@@ -1404,7 +1775,20 @@ fun FloatingBottomTimelineBar(
                     }
                 }
 
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Frames Viewer Grid Button
+                IconButton(
+                    onClick = onOpenFramesViewer,
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_stage_frames_viewer),
+                        contentDescription = "Frames Viewer",
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
 
                 // RIGHT: Play Button
                 IconButton(
@@ -1531,10 +1915,16 @@ fun StageSettingsBottomSheet(
     gridEnabled: Boolean,
     onDismiss: () -> Unit,
     onProjectSettings: () -> Unit,
+    onFramesViewer: () -> Unit,
     onToggleOnion: (Boolean) -> Unit,
     onEditOnion: () -> Unit,
     onToggleGrid: (Boolean) -> Unit,
+    onEditGrid: () -> Unit,
     onMagicCut: () -> Unit,
+    onAddImage: () -> Unit,
+    onAddVideo: () -> Unit,
+    onExportProject: () -> Unit,
+    onImportProject: () -> Unit,
     onMakeMovie: () -> Unit
 ) {
     ModalBottomSheet(
@@ -1546,6 +1936,7 @@ fun StageSettingsBottomSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 24.dp)
+                .verticalScroll(rememberScrollState())
         ) {
             // Drag handle line
             Box(
@@ -1562,7 +1953,7 @@ fun StageSettingsBottomSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(onClick = onProjectSettings)
-                    .padding(horizontal = 24.dp, vertical = 14.dp),
+                    .padding(horizontal = 24.dp, vertical = 13.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
@@ -1575,18 +1966,43 @@ fun StageSettingsBottomSheet(
                 Text(
                     text = "Project settings",
                     color = Color.White,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Medium
                 )
             }
 
             HorizontalDivider(color = Color(0xFF2E2E34), thickness = 0.8.dp)
 
-            // Row 2: Onion skin
+            // Row 2: Frames viewer (Full screen grid)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 10.dp),
+                    .clickable(onClick = onFramesViewer)
+                    .padding(horizontal = 24.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_stage_frames_viewer),
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Text(
+                    text = "Frames viewer",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            HorizontalDivider(color = Color(0xFF2E2E34), thickness = 0.8.dp)
+
+            // Row 3: Onion skin
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
@@ -1599,14 +2015,14 @@ fun StageSettingsBottomSheet(
                 Text(
                     text = "Onion skin",
                     color = Color.White,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f)
                 )
                 Text(
                     text = "Edit",
                     color = Color.White,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier
                         .clickable(onClick = onEditOnion)
@@ -1627,11 +2043,11 @@ fun StageSettingsBottomSheet(
 
             HorizontalDivider(color = Color(0xFF2E2E34), thickness = 0.8.dp)
 
-            // Row 3: Grid
+            // Row 4: Grid
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 10.dp),
+                    .padding(horizontal = 24.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
@@ -1644,16 +2060,18 @@ fun StageSettingsBottomSheet(
                 Text(
                     text = "Grid",
                     color = Color.White,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f)
                 )
                 Text(
                     text = "Edit",
                     color = Color.White,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    modifier = Modifier
+                        .clickable(onClick = onEditGrid)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Switch(
@@ -1670,12 +2088,12 @@ fun StageSettingsBottomSheet(
 
             HorizontalDivider(color = Color(0xFF2E2E34), thickness = 0.8.dp)
 
-            // Row 4: Magic cut
+            // Row 5: Magic cut
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(onClick = onMagicCut)
-                    .padding(horizontal = 24.dp, vertical = 14.dp),
+                    .padding(horizontal = 24.dp, vertical = 13.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
@@ -1688,12 +2106,120 @@ fun StageSettingsBottomSheet(
                 Text(
                     text = "Magic cut",
                     color = Color.White,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier
+                        .background(AccentPrimary, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text("NEW", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            HorizontalDivider(color = Color(0xFF2E2E34), thickness = 0.8.dp)
+
+            // Row 6: Add image
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onAddImage)
+                    .padding(horizontal = 24.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_stage_image_video),
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Text(
+                    text = "Add image",
+                    color = Color.White,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Medium
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider(color = Color(0xFF2E2E34), thickness = 0.8.dp)
+
+            // Row 7: Add video (Rotoscoping)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onAddVideo)
+                    .padding(horizontal = 24.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_stage_play),
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Text(
+                    text = "Add video (Rotoscoping)",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            HorizontalDivider(color = Color(0xFF2E2E34), thickness = 0.8.dp)
+
+            // Row 8: Export Project Package (.openclip ZIP)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onExportProject)
+                    .padding(horizontal = 24.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_stage_share),
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Text(
+                    text = "Export Project Package (.openclip)",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            HorizontalDivider(color = Color(0xFF2E2E34), thickness = 0.8.dp)
+
+            // Row 9: Import Project Package (.openclip ZIP)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onImportProject)
+                    .padding(horizontal = 24.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Text(
+                    text = "Import Project Package (.openclip)",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
 
             // Prominent "Make movie" Pink Pill Button
             Button(
@@ -2062,7 +2588,8 @@ fun LayerManagerBottomSheet(
     onAddLayer: () -> Unit,
     onToggleVisibility: (Int) -> Unit,
     onUpdateOpacity: (Int, Float) -> Unit,
-    onDeleteLayer: (Int) -> Unit
+    onDeleteLayer: (Int) -> Unit,
+    onOpenLayerSettings: (Layer) -> Unit = {}
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -2122,8 +2649,40 @@ fun LayerManagerBottomSheet(
                         Spacer(modifier = Modifier.width(8.dp))
 
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(layer.name, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(layer.name, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                if (layer.blendMode != BlendMode.NORMAL) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = layer.blendMode.name,
+                                        color = AccentPrimary,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                if (layer.alphaLock) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("[Lock]", color = Color(0xFF64D2FF), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
+                                if (layer.glowEnabled) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("[Glow]", color = Color(0xFFFFD60A), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
+                                if (layer.pixelatorEnabled) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("[Pixel]", color = Color(0xFF30D158), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
                             Text("Opacity: ${(layer.opacity * 100).toInt()}%", color = TextTertiary, fontSize = 12.sp)
+                        }
+
+                        IconButton(onClick = { onOpenLayerSettings(layer) }) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_settings_edit),
+                                contentDescription = "Layer Settings & FX",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
 
                         if (project.layers.size > 1) {
@@ -2137,100 +2696,6 @@ fun LayerManagerBottomSheet(
             Spacer(modifier = Modifier.height(20.dp))
         }
     }
-}
-
-/**
- * Onion Skin Configuration Dialog
- */
-@Composable
-fun OnionSkinDialog(
-    config: OnionConfig,
-    onDismiss: () -> Unit,
-    onSave: (OnionConfig) -> Unit
-) {
-    var framesBefore by remember { mutableStateOf(config.framesBefore.toFloat()) }
-    var framesAfter by remember { mutableStateOf(config.framesAfter.toFloat()) }
-    var startOpacity by remember { mutableStateOf(config.startOpacity) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = DarkSurface,
-        title = { Text("Onion Skin Settings", color = Color.White, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Frames Before (Past)", color = TextSecondary)
-                        Text("${framesBefore.toInt()}", color = AccentPrimary, fontWeight = FontWeight.Bold)
-                    }
-                    Slider(
-                        value = framesBefore,
-                        onValueChange = { framesBefore = it },
-                        valueRange = 0f..5f,
-                        steps = 4,
-                        colors = SliderDefaults.colors(thumbColor = AccentPrimary, activeTrackColor = AccentPrimary)
-                    )
-                }
-
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Frames After (Future)", color = TextSecondary)
-                        Text("${framesAfter.toInt()}", color = AccentPrimary, fontWeight = FontWeight.Bold)
-                    }
-                    Slider(
-                        value = framesAfter,
-                        onValueChange = { framesAfter = it },
-                        valueRange = 0f..5f,
-                        steps = 4,
-                        colors = SliderDefaults.colors(thumbColor = AccentPrimary, activeTrackColor = AccentPrimary)
-                    )
-                }
-
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Opacity", color = TextSecondary)
-                        Text("${(startOpacity * 100).toInt()}%", color = AccentPrimary, fontWeight = FontWeight.Bold)
-                    }
-                    Slider(
-                        value = startOpacity,
-                        onValueChange = { startOpacity = it },
-                        valueRange = 0.1f..0.9f,
-                        colors = SliderDefaults.colors(thumbColor = AccentPrimary, activeTrackColor = AccentPrimary)
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    onSave(
-                        config.copy(
-                            framesBefore = framesBefore.toInt(),
-                            framesAfter = framesAfter.toInt(),
-                            startOpacity = startOpacity
-                        )
-                    )
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary)
-            ) {
-                Text("Save", color = Color.White)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel", color = TextSecondary)
-            }
-        }
-    )
 }
 
 /**
@@ -2279,28 +2744,55 @@ fun ExportMovieDialog(
                 } else {
                     Text("Select format for '${project.title}':", color = TextSecondary, fontSize = 14.sp)
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Button(
-                            onClick = { format = ExportFormat.MP4_VIDEO },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (format == ExportFormat.MP4_VIDEO) AccentPrimary else Color(0xFF33333A)
-                            )
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Text("MP4 Video", color = Color.White)
+                            Button(
+                                onClick = { format = ExportFormat.MP4_VIDEO },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (format == ExportFormat.MP4_VIDEO) AccentPrimary else Color(0xFF33333A)
+                                )
+                            ) {
+                                Text("MP4 Video", color = Color.White)
+                            }
+
+                            Button(
+                                onClick = { format = ExportFormat.ANIMATED_GIF },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (format == ExportFormat.ANIMATED_GIF) AccentPrimary else Color(0xFF33333A)
+                                )
+                            ) {
+                                Text("GIF Anim", color = Color.White)
+                            }
                         }
 
-                        Button(
-                            onClick = { format = ExportFormat.ANIMATED_GIF },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (format == ExportFormat.ANIMATED_GIF) AccentPrimary else Color(0xFF33333A)
-                            )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Text("GIF Animation", color = Color.White)
+                            Button(
+                                onClick = { format = ExportFormat.SPRITE_SHEET },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (format == ExportFormat.SPRITE_SHEET) AccentPrimary else Color(0xFF33333A)
+                                )
+                            ) {
+                                Text("Sprite Sheet", color = Color.White)
+                            }
+
+                            Button(
+                                onClick = { format = ExportFormat.PNG_SEQUENCE },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (format == ExportFormat.PNG_SEQUENCE) AccentPrimary else Color(0xFF33333A)
+                                )
+                            ) {
+                                Text("PNG Seq (ZIP)", color = Color.White)
+                            }
                         }
                     }
 
@@ -2344,70 +2836,6 @@ fun ExportMovieDialog(
                 TextButton(onClick = onDismiss) {
                     Text("Cancel", color = TextSecondary)
                 }
-            }
-        }
-    )
-}
-
-/**
- * Project Settings Dialog (Title, FPS)
- */
-@Composable
-fun ProjectSettingsDialog(
-    project: Project,
-    onDismiss: () -> Unit,
-    onSave: (Project) -> Unit
-) {
-    var title by remember { mutableStateOf(project.title) }
-    var fps by remember { mutableStateOf(project.fps.toFloat()) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = DarkSurface,
-        title = { Text("Project Settings", color = Color.White, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("Project Name") },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = AccentPrimary
-                    )
-                )
-
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Frame Rate", color = TextSecondary)
-                        Text("${fps.toInt()} FPS", color = AccentPrimary, fontWeight = FontWeight.Bold)
-                    }
-                    Slider(
-                        value = fps,
-                        onValueChange = { fps = it },
-                        valueRange = 1f..30f,
-                        steps = 28,
-                        colors = SliderDefaults.colors(thumbColor = AccentPrimary, activeTrackColor = AccentPrimary)
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onSave(project.copy(title = title, fps = fps.toInt())) },
-                colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary)
-            ) {
-                Text("Save", color = Color.White)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel", color = TextSecondary)
             }
         }
     )

@@ -174,6 +174,15 @@ class DrawingCanvasView @JvmOverloads constructor(
 
     private fun updateMatrices() {
         viewMatrix.reset()
+        val cx = canvasWidth / 2f
+        val cy = canvasHeight / 2f
+        if (currentProject?.canvasFlipH == true) {
+            viewMatrix.postScale(-1f, 1f, cx, cy)
+        }
+        val rot = currentProject?.canvasRotation ?: 0f
+        if (rot != 0f) {
+            viewMatrix.postRotate(rot, cx, cy)
+        }
         viewMatrix.postScale(viewportScale, viewportScale)
         viewMatrix.postTranslate(viewportOffsetX, viewportOffsetY)
         viewMatrix.invert(invertMatrix)
@@ -305,7 +314,42 @@ class DrawingCanvasView @JvmOverloads constructor(
         canvas.drawRect(0f, 0f, canvasWidth.toFloat(), canvasHeight.toFloat(), borderPaint)
 
         canvas.restore()
+
+        // 12. Draw Live Eyedropper Magnifier Loupe in Screen Space
+        if (brushConfig.toolType == ToolType.EYEDROPPER && isDrawing) {
+            val loupeRadius = 44f
+            val loupeX = eyedropperScreenX
+            val loupeY = eyedropperScreenY - 110f
+            val fillPaint = Paint().apply {
+                color = eyedropperColor
+                style = Paint.Style.FILL
+            }
+            val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                style = Paint.Style.STROKE
+                strokeWidth = 3.5f
+            }
+            val borderShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                style = Paint.Style.STROKE
+                strokeWidth = 5.5f
+            }
+            canvas.drawCircle(loupeX, loupeY, loupeRadius, fillPaint)
+            canvas.drawCircle(loupeX, loupeY, loupeRadius, borderShadow)
+            canvas.drawCircle(loupeX, loupeY, loupeRadius, ringPaint)
+
+            // Crosshair in center
+            canvas.drawLine(loupeX - 8f, loupeY, loupeX + 8f, loupeY, ringPaint)
+            canvas.drawLine(loupeX, loupeY - 8f, loupeX, loupeY + 8f, ringPaint)
+        }
     }
+
+    var activeLayerAlphaLock: Boolean = false
+    private var currentPressure: Float = 1.0f
+    private var isStylusEraserActive: Boolean = false
+    private var eyedropperColor: Int = Color.BLACK
+    private var eyedropperScreenX: Float = 0f
+    private var eyedropperScreenY: Float = 0f
 
     private fun drawCanvasBackground(canvas: Canvas) {
         val proj = currentProject
@@ -323,20 +367,41 @@ class DrawingCanvasView @JvmOverloads constructor(
             }
             BackgroundType.PAPER_GRID -> {
                 canvas.drawRect(0f, 0f, canvasWidth.toFloat(), canvasHeight.toFloat(), Paint().apply { color = Color.WHITE })
-                val gridPaint = Paint().apply {
-                    color = 0xFFECECEC.toInt()
-                    strokeWidth = 1.5f
-                    style = Paint.Style.STROKE
-                }
-                var x = 40f
-                while (x < canvasWidth) {
-                    canvas.drawLine(x, 0f, x, canvasHeight.toFloat(), gridPaint)
-                    x += 40f
-                }
-                var y = 40f
-                while (y < canvasHeight) {
-                    canvas.drawLine(0f, y, canvasWidth.toFloat(), y, gridPaint)
-                    y += 40f
+            }
+        }
+
+        // Draw Custom Grid Overlay if enabled
+        val gridCfg = proj?.gridConfig
+        if (gridCfg != null && gridCfg.enabled) {
+            val gridPaint = Paint().apply {
+                color = gridCfg.color
+                alpha = (gridCfg.opacity.coerceIn(0.05f, 1f) * 255).toInt()
+                strokeWidth = 1.2f / viewportScale
+                style = Paint.Style.STROKE
+            }
+            val hs = gridCfg.hSpacing.coerceAtLeast(10).toFloat()
+            val vs = gridCfg.vSpacing.coerceAtLeast(10).toFloat()
+
+            // Vertical lines
+            var x = hs
+            while (x < canvasWidth) {
+                canvas.drawLine(x, 0f, x, canvasHeight.toFloat(), gridPaint)
+                x += hs
+            }
+            // Horizontal lines
+            var y = vs
+            while (y < canvasHeight) {
+                canvas.drawLine(0f, y, canvasWidth.toFloat(), y, gridPaint)
+                y += vs
+            }
+
+            // Isometric 3D Perspective Lines
+            if (gridCfg.isIsometric) {
+                var diag = -canvasHeight.toFloat()
+                while (diag < canvasWidth + canvasHeight) {
+                    canvas.drawLine(diag, 0f, diag + canvasHeight, canvasHeight.toFloat(), gridPaint)
+                    canvas.drawLine(diag, canvasHeight.toFloat(), diag + canvasHeight, 0f, gridPaint)
+                    diag += hs * 1.732f
                 }
             }
         }
@@ -381,15 +446,31 @@ class DrawingCanvasView @JvmOverloads constructor(
     }
 
     private fun setupStrokePaint(paint: Paint, config: BrushConfig) {
+        val effectiveTool = if (isStylusEraserActive) ToolType.ERASER else config.toolType
+
         paint.color = config.color
         paint.alpha = (config.opacity.coerceIn(0f, 1f) * 255).toInt()
-        paint.strokeWidth = config.size
+
+        // S-Pen / Stylus Pressure Dynamics
+        val baseSize = if (effectiveTool == ToolType.ERASER) config.eraserSize else config.size
+        val finalSize = if (config.stylusPressureEnabled && currentPressure > 0f && effectiveTool != ToolType.PIXEL) {
+            baseSize * (0.35f + 0.65f * currentPressure)
+        } else {
+            baseSize
+        }
+        paint.strokeWidth = finalSize
+
         paint.xfermode = null
         paint.maskFilter = null
         paint.pathEffect = null
         paint.isAntiAlias = true
 
-        when (config.toolType) {
+        // Alpha Lock handling: only paint inside existing non-transparent pixels
+        if (activeLayerAlphaLock && effectiveTool != ToolType.ERASER) {
+            paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+        }
+
+        when (effectiveTool) {
             ToolType.PEN, ToolType.BRUSH -> {
                 paint.strokeCap = Paint.Cap.ROUND
                 paint.strokeJoin = Paint.Join.ROUND
@@ -404,9 +485,9 @@ class DrawingCanvasView @JvmOverloads constructor(
             }
             ToolType.AIRBRUSH -> {
                 paint.strokeCap = Paint.Cap.ROUND
-                paint.strokeWidth = config.size * 2.2f
+                paint.strokeWidth = finalSize * 2.2f
                 paint.alpha = (config.opacity * 0.2f * 255).toInt()
-                val blurR = (config.size * 0.6f).coerceAtLeast(1f)
+                val blurR = (finalSize * 0.6f).coerceAtLeast(1f)
                 paint.maskFilter = BlurMaskFilter(blurR, BlurMaskFilter.Blur.NORMAL)
             }
             ToolType.PIXEL -> {
@@ -418,19 +499,19 @@ class DrawingCanvasView @JvmOverloads constructor(
             ToolType.CALLIGRAPHY -> {
                 paint.strokeCap = Paint.Cap.BUTT
                 paint.strokeJoin = Paint.Join.BEVEL
-                paint.strokeWidth = config.size * 1.5f
+                paint.strokeWidth = finalSize * 1.5f
             }
             ToolType.LEAF_SCATTER, ToolType.CHARCOAL -> {
                 paint.strokeCap = Paint.Cap.ROUND
-                paint.strokeWidth = config.size * 1.2f
-                paint.pathEffect = DashPathEffect(floatArrayOf(config.size * 0.8f, config.size * 0.4f), 0f)
+                paint.strokeWidth = finalSize * 1.2f
+                paint.pathEffect = DashPathEffect(floatArrayOf(finalSize * 0.8f, finalSize * 0.4f), 0f)
             }
             ToolType.ERASER -> {
                 paint.strokeCap = Paint.Cap.ROUND
-                paint.strokeWidth = config.eraserSize
+                paint.strokeWidth = finalSize
                 paint.alpha = (config.eraserOpacity.coerceIn(0f, 1f) * 255).toInt()
                 if (config.eraserHardness < 0.95f) {
-                    val blurR = (config.eraserSize * (1f - config.eraserHardness) * 0.4f).coerceAtLeast(1f)
+                    val blurR = (finalSize * (1f - config.eraserHardness) * 0.4f).coerceAtLeast(1f)
                     paint.maskFilter = BlurMaskFilter(blurR, BlurMaskFilter.Blur.NORMAL)
                 }
                 paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
@@ -521,6 +602,11 @@ class DrawingCanvasView @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         scaleDetector.onTouchEvent(event)
 
+        currentPressure = event.pressure
+        val isStylusButton = (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY != 0) ||
+                             (event.buttonState and MotionEvent.BUTTON_SECONDARY != 0)
+        isStylusEraserActive = isStylusButton
+
         if (event.pointerCount > 1) {
             isMultiTouch = true
             isDrawing = false
@@ -539,6 +625,15 @@ class DrawingCanvasView @JvmOverloads constructor(
         val canvasPt = screenToCanvas(event.x, event.y)
         val cx = canvasPt.x
         val cy = canvasPt.y
+
+        if (brushConfig.toolType == ToolType.EYEDROPPER) {
+            eyedropperScreenX = event.x
+            eyedropperScreenY = event.y
+            isDrawing = event.actionMasked != MotionEvent.ACTION_UP
+            handleEyedropper(cx, cy)
+            invalidate()
+            return true
+        }
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -562,8 +657,6 @@ class DrawingCanvasView @JvmOverloads constructor(
                 if (brushConfig.toolType == ToolType.LASSO) {
                     lassoPath.reset()
                     lassoPath.moveTo(cx, cy)
-                } else if (brushConfig.toolType == ToolType.EYEDROPPER) {
-                    handleEyedropper(cx, cy)
                 } else if (brushConfig.toolType == ToolType.FILL) {
                     handleFloodFill(cx, cy)
                 } else if (brushConfig.toolType == ToolType.SMUDGE) {

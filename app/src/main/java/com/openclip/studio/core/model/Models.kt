@@ -66,12 +66,65 @@ data class CanvasPreset(
     }
 }
 
+enum class BlendMode {
+    NORMAL,
+    MULTIPLY,
+    SCREEN,
+    OVERLAY,
+    DARKEN,
+    LIGHTEN,
+    COLOR_DODGE,
+    COLOR_BURN,
+    SOFT_LIGHT,
+    HARD_LIGHT,
+    DIFFERENCE,
+    EXCLUSION
+}
+
+enum class TextAlignment {
+    LEFT,
+    CENTER,
+    RIGHT
+}
+
+data class GridConfig(
+    val enabled: Boolean = false,
+    val hSpacing: Int = 40,
+    val vSpacing: Int = 40,
+    val opacity: Float = 0.35f,
+    val color: Int = 0xFF888888.toInt(),
+    val isIsometric: Boolean = false
+)
+
+data class TextConfig(
+    val text: String = "Text",
+    val fontName: String = "SansSerif",
+    val fontSize: Float = 48f,
+    val color: Int = 0xFF000000.toInt(),
+    val alignment: TextAlignment = TextAlignment.CENTER,
+    val letterSpacing: Float = 0f
+)
+
 data class Layer(
     val id: Int,
     val name: String,
     val visible: Boolean = true,
     val locked: Boolean = false,
-    val opacity: Float = 1.0f
+    val opacity: Float = 1.0f,
+    val blendMode: BlendMode = BlendMode.NORMAL,
+    val alphaLock: Boolean = false,
+    val isClippingMask: Boolean = false,
+    val glowEnabled: Boolean = false,
+    val glowColor: Int = 0xFFFFFF00.toInt(),
+    val glowRadius: Float = 15f,
+    val glowAlpha: Float = 0.8f,
+    val pixelatorEnabled: Boolean = false,
+    val pixelSize: Int = 8,
+    val shadowEnabled: Boolean = false,
+    val shadowColor: Int = 0x88000000.toInt(),
+    val shadowDx: Float = 5f,
+    val shadowDy: Float = 5f,
+    val shadowRadius: Float = 10f
 )
 
 data class OnionConfig(
@@ -80,7 +133,10 @@ data class OnionConfig(
     val framesAfter: Int = 0,
     val startOpacity: Float = 0.45f,
     val endOpacity: Float = 0.15f,
-    val coloredOnion: Boolean = true // Red for previous, Green for next
+    val coloredOnion: Boolean = true, // Red for previous, Green for next
+    val prevColor: Int = 0xFFFF3B30.toInt(), // Red
+    val nextColor: Int = 0xFF34C759.toInt(), // Green
+    val loop: Boolean = false // Loop across first/last frames
 )
 
 data class BrushConfig(
@@ -97,7 +153,11 @@ data class BrushConfig(
     val mirrorMode: MirrorMode = MirrorMode.NONE,
     val mirrorAxisX: Float = 0.5f,
     val mirrorAxisY: Float = 0.5f,
-    val fillTolerance: Int = 32
+    val fillTolerance: Int = 32,
+    val fillBleed: Int = 2,
+    val stylusPressureEnabled: Boolean = true,
+    val stylusEraserOverride: Boolean = false,
+    val hoverPreviewEnabled: Boolean = true
 )
 
 data class AudioClip(
@@ -118,6 +178,12 @@ data class AudioTrack(
     val muted: Boolean = false
 )
 
+
+data class SpriteSheetConfig(
+    val columns: Int = 4,
+    val padding: Int = 2
+)
+
 data class Project(
     val id: String = UUID.randomUUID().toString(),
     val title: String = "My Animation",
@@ -135,6 +201,12 @@ data class Project(
     ),
     val frameHolds: Map<Int, Int> = emptyMap(), // Frame index to hold duration in exposures (1 = normal)
     val pasteboardMargin: Int = 300,
+    val gridConfig: GridConfig = GridConfig(),
+    val onionConfig: OnionConfig = OnionConfig(),
+    val textConfig: TextConfig = TextConfig(),
+    val canvasRotation: Float = 0f,
+    val canvasFlipH: Boolean = false,
+    val isTimelapseRecording: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

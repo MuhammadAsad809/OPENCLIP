@@ -19,7 +19,8 @@ enum class ExportFormat {
     MP4_VIDEO,
     ANIMATED_GIF,
     PNG_SEQUENCE,
-    SINGLE_FRAME_PNG
+    SINGLE_FRAME_PNG,
+    SPRITE_SHEET
 }
 
 object ExportPipeline {
@@ -105,6 +106,27 @@ object ExportPipeline {
                 onProgress(1.0f)
                 saveToMediaStore(context, outFile, "image/png", Environment.DIRECTORY_PICTURES)
                 outFile
+            }
+
+            ExportFormat.SPRITE_SHEET -> {
+                val outFile = File(exportDir, "${sanitizedTitle}_spritesheet.png")
+                val jsonFile = File(exportDir, "${sanitizedTitle}_spritesheet.json")
+                val frames = mutableListOf<Bitmap>()
+                for (i in 0 until project.frameCount) {
+                    frames.add(repository.getCompositedFrame(project, i))
+                    onProgress((i + 1).toFloat() / (project.frameCount * 2))
+                }
+                val success = SpriteSheetEncoder.encodeSpriteSheet(
+                    context = context,
+                    frames = frames,
+                    outputFile = outFile,
+                    jsonFile = jsonFile
+                )
+                onProgress(1.0f)
+                if (success && outFile.exists() && outFile.length() > 0) {
+                    saveToMediaStore(context, outFile, "image/png", Environment.DIRECTORY_PICTURES)
+                    outFile
+                } else null
             }
         }
     }

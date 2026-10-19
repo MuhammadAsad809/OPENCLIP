@@ -330,6 +330,116 @@ class ProjectRepository(private val context: Context) {
         return updated
     }
 
+    fun addBetweenAllFrames(project: Project): Project {
+        val total = project.frameCount
+        var current = project
+        // Insert a new in-between frame after each frame from end to start to preserve indices
+        for (i in (total - 1) downTo 0) {
+            current = duplicateFrame(current, i)
+        }
+        return current
+    }
+
+    fun duplicateFrames(project: Project, indices: List<Int>): Project {
+        var current = project
+        val sorted = indices.sortedDescending()
+        for (idx in sorted) {
+            current = duplicateFrame(current, idx)
+        }
+        return current
+    }
+
+    fun deleteFrames(project: Project, indices: List<Int>): Project {
+        var current = project
+        val sorted = indices.sortedDescending()
+        for (idx in sorted) {
+            if (current.frameCount > 1) {
+                current = deleteFrame(current, idx)
+            }
+        }
+        return current
+    }
+
+    fun moveFrame(project: Project, fromIndex: Int, toIndex: Int): Project {
+        if (fromIndex == toIndex || fromIndex !in 0 until project.frameCount || toIndex !in 0 until project.frameCount) {
+            return project
+        }
+        val framesDir = File(File(projectsDir, project.id), "frames")
+        val temp = File(framesDir, "frame_moving_temp")
+        val fromFile = File(framesDir, "frame_$fromIndex")
+        if (!fromFile.exists()) return project
+
+        fromFile.renameTo(temp)
+        if (fromIndex < toIndex) {
+            for (i in (fromIndex + 1)..toIndex) {
+                val src = File(framesDir, "frame_$i")
+                val dst = File(framesDir, "frame_${i - 1}")
+                if (src.exists()) src.renameTo(dst)
+            }
+        } else {
+            for (i in (fromIndex - 1) downTo toIndex) {
+                val src = File(framesDir, "frame_$i")
+                val dst = File(framesDir, "frame_${i + 1}")
+                if (src.exists()) src.renameTo(dst)
+            }
+        }
+        temp.renameTo(File(framesDir, "frame_$toIndex"))
+
+        val updated = project.copy(updatedAt = System.currentTimeMillis())
+        saveProject(updated)
+        updateFrameThumbnail(updated, toIndex)
+        return updated
+    }
+
+    fun mergeLayerDown(project: Project, layerId: Int): Project {
+        val layerIdx = project.layers.indexOfFirst { it.id == layerId }
+        if (layerIdx <= 0) return project // Cannot merge bottom-most layer
+
+        val upperLayer = project.layers[layerIdx]
+        val lowerLayer = project.layers[layerIdx - 1]
+
+        for (i in 0 until project.frameCount) {
+            val upperFile = getLayerFile(project.id, i, upperLayer.id)
+            val lowerFile = getLayerFile(project.id, i, lowerLayer.id)
+
+            if (upperFile.exists() && upperFile.length() > 0) {
+                val upperBmp = BitmapFactory.decodeFile(upperFile.absolutePath)?.copy(Bitmap.Config.ARGB_8888, true)
+                val lowerBmp = if (lowerFile.exists() && lowerFile.length() > 0) {
+                    BitmapFactory.decodeFile(lowerFile.absolutePath)?.copy(Bitmap.Config.ARGB_8888, true)
+                } else {
+                    Bitmap.createBitmap(project.canvasWidth, project.canvasHeight, Bitmap.Config.ARGB_8888)
+                }
+
+                if (upperBmp != null && lowerBmp != null) {
+                    val canvas = Canvas(lowerBmp)
+                    val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+                        alpha = (upperLayer.opacity * 255).toInt().coerceIn(0, 255)
+                        xfermode = when (upperLayer.blendMode) {
+                            BlendMode.MULTIPLY -> PorterDuffXfermode(PorterDuff.Mode.MULTIPLY)
+                            BlendMode.SCREEN -> PorterDuffXfermode(PorterDuff.Mode.SCREEN)
+                            BlendMode.ADD -> PorterDuffXfermode(PorterDuff.Mode.ADD)
+                            BlendMode.OVERLAY -> PorterDuffXfermode(PorterDuff.Mode.OVERLAY)
+                            BlendMode.SRC_ATOP -> PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+                            else -> null
+                        }
+                    }
+                    canvas.drawBitmap(upperBmp, 0f, 0f, paint)
+                    saveLayerBitmap(project.id, i, lowerLayer.id, lowerBmp)
+                    upperFile.delete()
+                    updateFrameThumbnail(project, i)
+                }
+            }
+        }
+
+        val newLayers = project.layers.filter { it.id != upperLayer.id }
+        val updated = project.copy(
+            layers = newLayers,
+            updatedAt = System.currentTimeMillis()
+        )
+        saveProject(updated)
+        return updated
+    }
+
     // JSON serialization
     private fun readProjectJson(file: File): Project {
         val json = JSONObject(file.readText(Charsets.UTF_8))
@@ -342,6 +452,9 @@ class ProjectRepository(private val context: Context) {
         val backgroundColor = json.optInt("backgroundColor", Color.WHITE)
         val bgTypeStr = json.optString("backgroundType", BackgroundType.SOLID.name)
         val backgroundType = try { BackgroundType.valueOf(bgTypeStr) } catch (e: Exception) { BackgroundType.SOLID }
+        val canvasRotation = json.optDouble("canvasRotation", 0.0).toFloat()
+        val canvasFlipH = json.optBoolean("canvasFlipH", false)
+        val isTimelapseRecording = json.optBoolean("isTimelapseRecording", false)
         val createdAt = json.optLong("createdAt", System.currentTimeMillis())
         val updatedAt = json.optLong("updatedAt", System.currentTimeMillis())
 
@@ -350,19 +463,66 @@ class ProjectRepository(private val context: Context) {
         if (layersArr != null) {
             for (i in 0 until layersArr.length()) {
                 val lJson = layersArr.getJSONObject(i)
+                val bModeStr = lJson.optString("blendMode", com.openclip.studio.core.model.BlendMode.NORMAL.name)
+                val blendMode = try { com.openclip.studio.core.model.BlendMode.valueOf(bModeStr) } catch (e: Exception) { com.openclip.studio.core.model.BlendMode.NORMAL }
                 layers.add(
                     Layer(
                         id = lJson.getInt("id"),
                         name = lJson.optString("name", "Layer ${i + 1}"),
                         visible = lJson.optBoolean("visible", true),
                         locked = lJson.optBoolean("locked", false),
-                        opacity = lJson.optDouble("opacity", 1.0).toFloat()
+                        opacity = lJson.optDouble("opacity", 1.0).toFloat(),
+                        blendMode = blendMode,
+                        alphaLock = lJson.optBoolean("alphaLock", false),
+                        isClippingMask = lJson.optBoolean("isClippingMask", false),
+                        glowEnabled = lJson.optBoolean("glowEnabled", false),
+                        glowColor = lJson.optInt("glowColor", 0xFFFFFF00.toInt()),
+                        glowRadius = lJson.optDouble("glowRadius", 15.0).toFloat(),
+                        glowAlpha = lJson.optDouble("glowAlpha", 0.8).toFloat(),
+                        pixelatorEnabled = lJson.optBoolean("pixelatorEnabled", false),
+                        pixelSize = lJson.optInt("pixelSize", 8),
+                        shadowEnabled = lJson.optBoolean("shadowEnabled", false),
+                        shadowColor = lJson.optInt("shadowColor", 0x88000000.toInt()),
+                        shadowRadius = lJson.optDouble("shadowRadius", 10.0).toFloat()
                     )
                 )
             }
         }
         if (layers.isEmpty()) {
             layers.add(Layer(0, "Layer 1"))
+        }
+
+        // Grid Config
+        val gridJson = json.optJSONObject("gridConfig")
+        val gridConfig = if (gridJson != null) {
+            com.openclip.studio.core.model.GridConfig(
+                enabled = gridJson.optBoolean("enabled", false),
+                hSpacing = gridJson.optInt("hSpacing", 40),
+                vSpacing = gridJson.optInt("vSpacing", 40),
+                opacity = gridJson.optDouble("opacity", 0.35).toFloat(),
+                color = gridJson.optInt("color", 0xFF888888.toInt()),
+                isIsometric = gridJson.optBoolean("isIsometric", false)
+            )
+        } else {
+            com.openclip.studio.core.model.GridConfig()
+        }
+
+        // Onion Config
+        val onionJson = json.optJSONObject("onionConfig")
+        val onionConfig = if (onionJson != null) {
+            com.openclip.studio.core.model.OnionConfig(
+                enabled = onionJson.optBoolean("enabled", true),
+                framesBefore = onionJson.optInt("framesBefore", 1),
+                framesAfter = onionJson.optInt("framesAfter", 0),
+                startOpacity = onionJson.optDouble("startOpacity", 0.45).toFloat(),
+                endOpacity = onionJson.optDouble("endOpacity", 0.15).toFloat(),
+                coloredOnion = onionJson.optBoolean("coloredOnion", true),
+                prevColor = onionJson.optInt("prevColor", 0xFFFF3B30.toInt()),
+                nextColor = onionJson.optInt("nextColor", 0xFF34C759.toInt()),
+                loop = onionJson.optBoolean("loop", false)
+            )
+        } else {
+            com.openclip.studio.core.model.OnionConfig()
         }
 
         val audioTracks = mutableListOf<com.openclip.studio.core.model.AudioTrack>()
@@ -424,6 +584,11 @@ class ProjectRepository(private val context: Context) {
             layers = layers,
             audioTracks = audioTracks,
             frameHolds = frameHolds,
+            gridConfig = gridConfig,
+            onionConfig = onionConfig,
+            canvasRotation = canvasRotation,
+            canvasFlipH = canvasFlipH,
+            isTimelapseRecording = isTimelapseRecording,
             createdAt = createdAt,
             updatedAt = updatedAt
         )
@@ -439,6 +604,9 @@ class ProjectRepository(private val context: Context) {
         json.put("frameCount", p.frameCount)
         json.put("backgroundColor", p.backgroundColor)
         json.put("backgroundType", p.backgroundType.name)
+        json.put("canvasRotation", p.canvasRotation.toDouble())
+        json.put("canvasFlipH", p.canvasFlipH)
+        json.put("isTimelapseRecording", p.isTimelapseRecording)
         json.put("createdAt", p.createdAt)
         json.put("updatedAt", p.updatedAt)
 
@@ -450,9 +618,44 @@ class ProjectRepository(private val context: Context) {
             lObj.put("visible", l.visible)
             lObj.put("locked", l.locked)
             lObj.put("opacity", l.opacity.toDouble())
+            lObj.put("blendMode", l.blendMode.name)
+            lObj.put("alphaLock", l.alphaLock)
+            lObj.put("isClippingMask", l.isClippingMask)
+            lObj.put("glowEnabled", l.glowEnabled)
+            lObj.put("glowColor", l.glowColor)
+            lObj.put("glowRadius", l.glowRadius.toDouble())
+            lObj.put("glowAlpha", l.glowAlpha.toDouble())
+            lObj.put("pixelatorEnabled", l.pixelatorEnabled)
+            lObj.put("pixelSize", l.pixelSize)
+            lObj.put("shadowEnabled", l.shadowEnabled)
+            lObj.put("shadowColor", l.shadowColor)
+            lObj.put("shadowRadius", l.shadowRadius.toDouble())
             layersArr.put(lObj)
         }
         json.put("layers", layersArr)
+
+        val gridObj = JSONObject().apply {
+            put("enabled", p.gridConfig.enabled)
+            put("hSpacing", p.gridConfig.hSpacing)
+            put("vSpacing", p.gridConfig.vSpacing)
+            put("opacity", p.gridConfig.opacity.toDouble())
+            put("color", p.gridConfig.color)
+            put("isIsometric", p.gridConfig.isIsometric)
+        }
+        json.put("gridConfig", gridObj)
+
+        val onionObj = JSONObject().apply {
+            put("enabled", p.onionConfig.enabled)
+            put("framesBefore", p.onionConfig.framesBefore)
+            put("framesAfter", p.onionConfig.framesAfter)
+            put("startOpacity", p.onionConfig.startOpacity.toDouble())
+            put("endOpacity", p.onionConfig.endOpacity.toDouble())
+            put("coloredOnion", p.onionConfig.coloredOnion)
+            put("prevColor", p.onionConfig.prevColor)
+            put("nextColor", p.onionConfig.nextColor)
+            put("loop", p.onionConfig.loop)
+        }
+        json.put("onionConfig", onionObj)
 
         val holdsObj = JSONObject()
         for ((idx, hold) in p.frameHolds) {
@@ -485,6 +688,72 @@ class ProjectRepository(private val context: Context) {
         json.put("audioTracks", tracksArr)
 
         return json.toString(2)
+    }
+
+    // Project Package Export (.openclip / .fc ZIP format)
+    fun exportProjectPackage(projectId: String, targetZipFile: File): Boolean {
+        val projectDir = File(projectsDir, projectId)
+        if (!projectDir.exists()) return false
+
+        return try {
+            java.util.zip.ZipOutputStream(FileOutputStream(targetZipFile)).use { zos ->
+                projectDir.walkTopDown().forEach { file ->
+                    if (file.isFile) {
+                        val relPath = file.relativeTo(projectDir).path
+                        val entry = java.util.zip.ZipEntry(relPath)
+                        zos.putNextEntry(entry)
+                        file.inputStream().use { it.copyTo(zos) }
+                        zos.closeEntry()
+                    }
+                }
+            }
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    // Project Package Import (.openclip / .fc ZIP format)
+    fun importProjectPackage(sourceZipFile: File): Project? {
+        val newId = UUID.randomUUID().toString()
+        val destDir = File(projectsDir, newId).apply { mkdirs() }
+
+        try {
+            java.util.zip.ZipInputStream(sourceZipFile.inputStream()).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    val file = File(destDir, entry.name)
+                    if (entry.isDirectory) {
+                        file.mkdirs()
+                    } else {
+                        file.parentFile?.mkdirs()
+                        FileOutputStream(file).use { out -> zis.copyTo(out) }
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                }
+            }
+
+            val jsonFile = File(destDir, "project.json")
+            if (!jsonFile.exists()) {
+                destDir.deleteRecursively()
+                return null
+            }
+
+            val imported = readProjectJson(jsonFile)
+            val updated = imported.copy(
+                id = newId,
+                title = "${imported.title} (Imported)",
+                updatedAt = System.currentTimeMillis()
+            )
+            saveProject(updated)
+            return updated
+        } catch (e: Exception) {
+            e.printStackTrace()
+            destDir.deleteRecursively()
+            return null
+        }
     }
 
     fun getAudioDir(projectId: String): File {
