@@ -398,6 +398,8 @@ class ProjectRepository(private val context: Context) {
                     )
                 )
             }
+        }
+
         val frameHolds = mutableMapOf<Int, Int>()
         val holdsObj = json.optJSONObject("frameHolds")
         if (holdsObj != null) {
