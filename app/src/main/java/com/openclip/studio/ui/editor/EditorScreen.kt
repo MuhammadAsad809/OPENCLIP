@@ -98,6 +98,11 @@ fun EditorScreen(
     var isImportingVideo by remember { mutableStateOf(false) }
     var importVideoProgress by remember { mutableStateOf(0f) }
 
+    // Canvas view reference & revision counter
+    var canvasViewRef by remember { mutableStateOf<DrawingCanvasView?>(null) }
+    var frameRevision by remember { mutableStateOf(0) }
+    var copiedFrameBitmap by remember { mutableStateOf<Bitmap?>(null) }
+
     // Media pickers
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -203,12 +208,7 @@ fun EditorScreen(
         return
     }
 
-    // Canvas view reference & revision counter
-    var canvasViewRef by remember { mutableStateOf<DrawingCanvasView?>(null) }
-    var frameRevision by remember { mutableStateOf(0) }
 
-    // Copied frame buffer for copy/paste
-    var copiedFrameBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     // Active layer bitmap
     val activeBmp = remember(project.id, currentFrameIndex, activeLayerId, frameRevision) {
