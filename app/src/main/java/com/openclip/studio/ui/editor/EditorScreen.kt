@@ -16,6 +16,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -42,12 +44,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 import com.openclip.studio.R
 import com.openclip.studio.core.engine.DrawingCanvasView
 import com.openclip.studio.core.export.ExportFormat
 import com.openclip.studio.core.export.ExportPipeline
 import com.openclip.studio.core.model.*
 import com.openclip.studio.ui.theme.*
+import com.openclip.studio.ui.toolkit.AnimationToolkitDialog
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -97,6 +104,12 @@ fun EditorScreen(
     var showImageVideoSheet by remember { mutableStateOf(false) }
     var isImportingVideo by remember { mutableStateOf(false) }
     var importVideoProgress by remember { mutableStateOf(0f) }
+    var showRulerMirrorDialog by remember { mutableStateOf(false) }
+    var showToolkitDialog by remember { mutableStateOf(false) }
+    var showFrameHoldDialog by remember { mutableStateOf(false) }
+    var targetHoldFrameIndex by remember { mutableStateOf(0) }
+    var capsuleOffset by remember { mutableStateOf(IntOffset(0, 0)) }
+    var hudFeedbackText by remember { mutableStateOf<String?>(null) }
 
     // Canvas view reference & revision counter
     var canvasViewRef by remember { mutableStateOf<DrawingCanvasView?>(null) }
@@ -298,6 +311,12 @@ fun EditorScreen(
                 onDiamondClick = {
                     Toast.makeText(context, "OpenClip: 100% Free Animation Studio (All Tools Unlocked)", Toast.LENGTH_SHORT).show()
                 },
+                onRulerClick = {
+                    showRulerMirrorDialog = true
+                },
+                onToolkitClick = {
+                    showToolkitDialog = true
+                },
                 onShareClick = {
                     showExportDialog = true
                 },
@@ -401,12 +420,17 @@ fun EditorScreen(
                 }
             )
 
-            // FLOATING TOOL CAPSULE (Near Top)
+            // FLOATING TOOL CAPSULE (Movable across screen)
             FloatingToolCapsule(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 10.dp),
+                    .padding(top = 10.dp)
+                    .offset { capsuleOffset },
                 currentTool = brushConfig.toolType,
+                brushConfig = brushConfig,
+                onDragHandleDelta = { delta ->
+                    capsuleOffset += delta
+                },
                 onSelectTool = { tool ->
                     showSecondaryTools = false
                     when (tool) {
@@ -438,28 +462,116 @@ fun EditorScreen(
                         else -> viewModel.setToolType(tool)
                     }
                 },
+                onSizeScrubbed = { newSize ->
+                    val s = newSize.coerceIn(1f, 150f)
+                    viewModel.setBrushSize(s)
+                    hudFeedbackText = "Size: ${s.toInt()}px"
+                },
+                onOpacityScrubbed = { newOp ->
+                    val op = newOp.coerceIn(0.01f, 1.0f)
+                    viewModel.setBrushOpacity(op)
+                    hudFeedbackText = "Opacity: ${(op * 100).toInt()}%"
+                },
+                onColorClick = {
+                    showColorDialog = true
+                },
                 onToggleMoreTools = {
                     showSecondaryTools = !showSecondaryTools
                 }
             )
 
-            // SECONDARY TOOL POPUP CARD (Smudge & Blur)
+            // Live HUD feedback badge (Size & Opacity changes)
+            LaunchedEffect(hudFeedbackText) {
+                if (hudFeedbackText != null) {
+                    kotlinx.coroutines.delay(1200L)
+                    hudFeedbackText = null
+                }
+            }
+            hudFeedbackText?.let { feedback ->
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 72.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    color = Color(0xDD000000)
+                ) {
+                    Text(
+                        text = feedback,
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                    )
+                }
+            }
+
+            // SECONDARY TOOL POPUP CARD (Smudge, Blur, Ruler, Toolkit)
             if (showSecondaryTools) {
                 SecondaryToolPopupCard(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = 74.dp),
+                        .padding(top = 74.dp)
+                        .offset { capsuleOffset },
                     onSelectSmudge = {
                         viewModel.setToolType(ToolType.SMUDGE)
                         showSecondaryTools = false
-                        Toast.makeText(context, "Smudge Tool selected", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Smudge Tool: Blend and mix colors", Toast.LENGTH_SHORT).show()
                     },
                     onSelectBlur = {
                         viewModel.setToolType(ToolType.BLUR)
                         showSecondaryTools = false
-                        Toast.makeText(context, "Blur Tool selected", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Blur Tool: Soften edges and details", Toast.LENGTH_SHORT).show()
+                    },
+                    onSelectRuler = {
+                        showSecondaryTools = false
+                        showRulerMirrorDialog = true
+                    },
+                    onSelectToolkit = {
+                        showSecondaryTools = false
+                        showToolkitDialog = true
                     }
                 )
+            }
+
+            // FLOATING LASSO ACTION BAR (When Lasso tool is active)
+            if (brushConfig.toolType == ToolType.LASSO) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 90.dp)
+                        .shadow(12.dp, RoundedCornerShape(20.dp))
+                        .border(1.dp, DarkBorder, RoundedCornerShape(20.dp)),
+                    shape = RoundedCornerShape(20.dp),
+                    color = DarkCapsule
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { canvasViewRef?.flipLassoHorizontal() }) {
+                            Text("Flip X", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        TextButton(onClick = { canvasViewRef?.flipLassoVertical() }) {
+                            Text("Flip Y", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        TextButton(onClick = { canvasViewRef?.duplicateLassoSelection() }) {
+                            Text("Duplicate", color = AccentPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        TextButton(onClick = { canvasViewRef?.applyLassoPerspective() }) {
+                            Text("Perspective", color = Color(0xFF30B0C7), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        TextButton(onClick = { canvasViewRef?.deleteLassoSelection() }) {
+                            Text("Delete", color = Color(0xFFFF453A), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        IconButton(onClick = {
+                            canvasViewRef?.stampLassoSelection()
+                            viewModel.setToolType(ToolType.PEN)
+                        }, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Default.Check, contentDescription = "Done", tint = AccentPrimary)
+                        }
+                    }
+                }
             }
 
             // FLOATING BOTTOM TIMELINE BAR (Above Action Strip)
@@ -472,6 +584,10 @@ fun EditorScreen(
                 isPlaying = isPlaying,
                 repository = viewModel.repository,
                 onSelectFrame = { viewModel.selectFrame(it) },
+                onFrameHoldClick = { idx ->
+                    targetHoldFrameIndex = idx
+                    showFrameHoldDialog = true
+                },
                 onAddFrame = {
                     viewModel.addFrame()
                     frameRevision++
@@ -520,8 +636,10 @@ fun EditorScreen(
         BrushSettingsDialog(
             config = brushConfig,
             onDismiss = { showBrushDialog = false },
+            onSelectBrushType = { viewModel.setToolType(it) },
             onUpdateSize = { viewModel.setBrushSize(it) },
             onUpdateOpacity = { viewModel.setBrushOpacity(it) },
+            onUpdateSmoothing = { viewModel.setStrokeSmoothing(it) },
             onOpenColor = {
                 showBrushDialog = false
                 showColorDialog = true
@@ -532,20 +650,74 @@ fun EditorScreen(
     // ERASER SETTINGS DIALOG
     if (showEraserDialog) {
         EraserSettingsDialog(
-            eraserSize = brushConfig.eraserSize,
+            config = brushConfig,
             onDismiss = { showEraserDialog = false },
-            onUpdateSize = { viewModel.setEraserSize(it) }
+            onUpdateSize = { viewModel.setEraserSize(it) },
+            onUpdateHardness = { viewModel.setEraserHardness(it) },
+            onUpdateOpacity = { viewModel.setBrushOpacity(it) }
         )
     }
 
-    // COLOR PICKER DIALOG
+    // PRO COLOR PICKER DIALOG (Wheel, Classic, Harmony, Values, Custom Palettes)
     if (showColorDialog) {
-        ColorPickerDialog(
+        ProColorPickerDialog(
             initialColor = brushConfig.color,
             onDismiss = { showColorDialog = false },
             onColorSelected = {
                 viewModel.setBrushColor(it)
                 showColorDialog = false
+            }
+        )
+    }
+
+    // RULER & MIRROR SYMMETRY DIALOG
+    if (showRulerMirrorDialog) {
+        RulerMirrorDialog(
+            config = brushConfig,
+            onDismiss = { showRulerMirrorDialog = false },
+            onUpdateRulerType = { viewModel.setRulerType(it) },
+            onUpdateRulerLock = { viewModel.setRulerLocked(it) },
+            onUpdateMirrorMode = { viewModel.setMirrorMode(it) }
+        )
+    }
+
+    // ANIMATOR'S TOOLKIT DIALOG (Motion Guides, Audio SFX, Backdrops, Props, Palettes)
+    if (showToolkitDialog) {
+        AnimationToolkitDialog(
+            project = project,
+            currentFrameIndex = currentFrameIndex,
+            repository = viewModel.repository,
+            activeLayerBitmap = canvasViewRef?.activeLayerBitmap,
+            onDismiss = { showToolkitDialog = false },
+            onProjectUpdated = { updatedProj ->
+                viewModel.setProject(updatedProj)
+                frameRevision++
+            },
+            onBitmapStamped = {
+                val cur = canvasViewRef?.activeLayerBitmap
+                if (cur != null) {
+                    viewModel.historyManager.pushState(cur)
+                    viewModel.repository.saveLayerBitmap(project.id, currentFrameIndex, activeLayerId, cur)
+                    viewModel.repository.updateFrameThumbnail(project, currentFrameIndex)
+                    canvasViewRef?.invalidate()
+                    frameRevision++
+                }
+            },
+            onColorSelected = {
+                viewModel.setBrushColor(it)
+            }
+        )
+    }
+
+    // FRAME HOLD / EXPOSURE DIALOG
+    if (showFrameHoldDialog) {
+        FrameHoldDialog(
+            frameIndex = targetHoldFrameIndex,
+            currentHold = project.frameHolds[targetHoldFrameIndex] ?: 1,
+            onDismiss = { showFrameHoldDialog = false },
+            onSetHold = { hold ->
+                viewModel.setFrameHold(targetHoldFrameIndex, hold)
+                frameRevision++
             }
         )
     }
@@ -689,6 +861,8 @@ fun EditorScreen(
 fun StudioTopBar(
     onBack: () -> Unit,
     onDiamondClick: () -> Unit,
+    onRulerClick: () -> Unit = {},
+    onToolkitClick: () -> Unit = {},
     onShareClick: () -> Unit,
     onOverflowClick: () -> Unit
 ) {
@@ -714,7 +888,7 @@ fun StudioTopBar(
                 )
             }
 
-            Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(2.dp))
 
             // Coral Diamond
             IconButton(onClick = onDiamondClick, modifier = Modifier.size(40.dp)) {
@@ -723,6 +897,16 @@ fun StudioTopBar(
                     contentDescription = "Features",
                     tint = AccentPrimary,
                     modifier = Modifier.size(24.dp)
+                )
+            }
+
+            // Ruler & Mirror (Scale icon)
+            IconButton(onClick = onRulerClick, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_stage_ruler),
+                    contentDescription = "Ruler & Mirror",
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
                 )
             }
 
@@ -749,6 +933,16 @@ fun StudioTopBar(
 
             Spacer(modifier = Modifier.weight(1f))
 
+            // Animator's Toolkit (Resources & SFX)
+            IconButton(onClick = onToolkitClick, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_stage_toolkit),
+                    contentDescription = "Animator Toolkit",
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+
             // Coral Share
             IconButton(onClick = onShareClick, modifier = Modifier.size(40.dp)) {
                 Icon(
@@ -759,7 +953,7 @@ fun StudioTopBar(
                 )
             }
 
-            Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(2.dp))
 
             // Overflow 3-dots
             IconButton(onClick = onOverflowClick, modifier = Modifier.size(40.dp)) {
@@ -782,7 +976,12 @@ fun StudioTopBar(
 fun FloatingToolCapsule(
     modifier: Modifier = Modifier,
     currentTool: ToolType,
+    brushConfig: BrushConfig,
+    onDragHandleDelta: (IntOffset) -> Unit,
     onSelectTool: (ToolType) -> Unit,
+    onSizeScrubbed: (Float) -> Unit,
+    onOpacityScrubbed: (Float) -> Unit,
+    onColorClick: () -> Unit,
     onToggleMoreTools: () -> Unit
 ) {
     Surface(
@@ -805,16 +1004,44 @@ fun FloatingToolCapsule(
                 modifier = Modifier
                     .padding(horizontal = 4.dp)
                     .size(16.dp, 24.dp)
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            onDragHandleDelta(IntOffset(dragAmount.x.roundToInt(), dragAmount.y.roundToInt()))
+                        }
+                    }
             )
 
             // Brush Button
-            val isBrushActive = currentTool == ToolType.PEN || currentTool == ToolType.BRUSH || currentTool == ToolType.PENCIL || currentTool == ToolType.AIRBRUSH
+            val isBrushActive = currentTool == ToolType.PEN || currentTool == ToolType.BRUSH || currentTool == ToolType.PENCIL || currentTool == ToolType.AIRBRUSH || currentTool == ToolType.CALLIGRAPHY || currentTool == ToolType.PIXEL || currentTool == ToolType.CHARCOAL
             ToolCapsuleButton(
                 iconRes = R.drawable.ic_stage_v2_brush,
                 contentDescription = "Brush",
                 isActive = isBrushActive,
                 onClick = { onSelectTool(ToolType.BRUSH) }
             )
+
+            // Brush Size Quick Scrubber (drag up/down to adjust size)
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xFF333338))
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            val delta = -dragAmount.y * 0.4f
+                            onSizeScrubbed(brushConfig.size + delta)
+                        }
+                    }
+                    .clickable { onSelectTool(ToolType.BRUSH) },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("${brushConfig.size.toInt()}", color = AccentPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("px", color = TextSecondary, fontSize = 8.sp)
+                }
+            }
 
             // Eraser Button
             val isEraserActive = currentTool == ToolType.ERASER
@@ -851,6 +1078,31 @@ fun FloatingToolCapsule(
                 isActive = isTextActive,
                 onClick = { onSelectTool(ToolType.TEXT) }
             )
+
+            // Quick Color & Opacity Scrubber (drag up/down for opacity, tap for Pro Color Picker)
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xFF333338))
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            val delta = -dragAmount.y * 0.005f
+                            onOpacityScrubbed(brushConfig.opacity + delta)
+                        }
+                    }
+                    .clickable(onClick = onColorClick),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(Color(brushConfig.color).copy(alpha = brushConfig.opacity))
+                        .border(2.dp, Color.White, CircleShape)
+                )
+            }
 
             // More Tools Button (...)
             Box(
@@ -898,14 +1150,15 @@ fun ToolCapsuleButton(
 
 /**
  * Secondary Tool Card (Revealed when tapping '...')
- * Reference: media_1792380169377.png
- * Contains Smudge and Blur tools
+ * Contains Smudge, Blur, Ruler & Mirror, and Toolkit
  */
 @Composable
 fun SecondaryToolPopupCard(
     modifier: Modifier = Modifier,
     onSelectSmudge: () -> Unit,
-    onSelectBlur: () -> Unit
+    onSelectBlur: () -> Unit,
+    onSelectRuler: () -> Unit,
+    onSelectToolkit: () -> Unit
 ) {
     Surface(
         modifier = modifier
@@ -915,8 +1168,8 @@ fun SecondaryToolPopupCard(
         color = DarkSurface
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(32.dp),
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(22.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Smudge
@@ -928,7 +1181,7 @@ fun SecondaryToolPopupCard(
                     painter = painterResource(id = R.drawable.ic_stage_v2_smudge),
                     contentDescription = "Smudge",
                     tint = Color.White,
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(26.dp)
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text("Smudge", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
@@ -943,10 +1196,40 @@ fun SecondaryToolPopupCard(
                     painter = painterResource(id = R.drawable.ic_stage_v2_blur),
                     contentDescription = "Blur",
                     tint = Color.White,
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(26.dp)
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text("Blur", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            }
+
+            // Ruler / Mirror
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clickable(onClick = onSelectRuler)
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_stage_ruler),
+                    contentDescription = "Ruler",
+                    tint = AccentPrimary,
+                    modifier = Modifier.size(26.dp)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Ruler", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            }
+
+            // Toolkit
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clickable(onClick = onSelectToolkit)
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_stage_toolkit),
+                    contentDescription = "Toolkit",
+                    tint = Color(0xFF30B0C7),
+                    modifier = Modifier.size(26.dp)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Toolkit", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -967,6 +1250,7 @@ fun FloatingBottomTimelineBar(
     isPlaying: Boolean,
     repository: com.openclip.studio.data.ProjectRepository,
     onSelectFrame: (Int) -> Unit,
+    onFrameHoldClick: (Int) -> Unit = {},
     onAddFrame: () -> Unit,
     onTogglePlay: () -> Unit,
     onOpenLayers: () -> Unit
@@ -1044,7 +1328,9 @@ fun FloatingBottomTimelineBar(
                                     color = if (isSelected) AccentPrimary else Color(0xFF44444C),
                                     shape = RoundedCornerShape(14.dp)
                                 )
-                                .clickable { onSelectFrame(idx) }
+                                .clickable {
+                                    if (isSelected) onFrameHoldClick(idx) else onSelectFrame(idx)
+                                }
                         ) {
                             if (thumbBmp != null) {
                                 Image(
@@ -1068,6 +1354,26 @@ fun FloatingBottomTimelineBar(
                                         text = "${idx + 1}",
                                         color = Color.White,
                                         fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            // Frame Hold Duration Badge (Gold Pill in Bottom-Left)
+                            val holdDuration = project.frameHolds[idx] ?: 1
+                            if (holdDuration > 1) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomStart)
+                                        .padding(3.dp)
+                                        .background(Color(0xFFFFB300), RoundedCornerShape(6.dp))
+                                        .clickable { onFrameHoldClick(idx) }
+                                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                                ) {
+                                    Text(
+                                        text = "${holdDuration}x",
+                                        color = Color.Black,
+                                        fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
@@ -1412,35 +1718,97 @@ fun StageSettingsBottomSheet(
 }
 
 /**
- * Brush Settings Dialog (Brush size, opacity, color)
+ * Brush Settings Dialog (Brush size, opacity, smoothing, color, and types)
  */
 @Composable
 fun BrushSettingsDialog(
     config: BrushConfig,
     onDismiss: () -> Unit,
+    onSelectBrushType: (ToolType) -> Unit,
     onUpdateSize: (Float) -> Unit,
     onUpdateOpacity: (Float) -> Unit,
+    onUpdateSmoothing: (Float) -> Unit,
     onOpenColor: () -> Unit
 ) {
+    val brushTypes = listOf(
+        Pair("Pen", ToolType.PEN),
+        Pair("Pencil", ToolType.PENCIL),
+        Pair("Brush", ToolType.BRUSH),
+        Pair("Airbrush", ToolType.AIRBRUSH),
+        Pair("Marker", ToolType.MARKER),
+        Pair("Crayon", ToolType.CRAYON),
+        Pair("Pixel", ToolType.PIXEL),
+        Pair("Calligraphy", ToolType.CALLIGRAPHY),
+        Pair("Leaves", ToolType.LEAF_SCATTER),
+        Pair("Charcoal", ToolType.CHARCOAL)
+    )
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = DarkSurface,
-        title = { Text("Brush Settings", color = Color.White, fontWeight = FontWeight.Bold) },
+        title = { Text("Brush & Line Art Settings", color = Color.White, fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                // Brush Types Selection
+                Text("BRUSH TYPE", color = AccentPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(brushTypes.size) { i ->
+                        val (name, type) = brushTypes[i]
+                        val isSel = config.toolType == type
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isSel) AccentPrimary else Color(0xFF222226))
+                                .border(1.dp, if (isSel) AccentPrimary else Color(0xFF383840), RoundedCornerShape(10.dp))
+                                .clickable { onSelectBrushType(type) }
+                                .padding(horizontal = 12.dp, vertical = 7.dp)
+                        ) {
+                            Text(
+                                text = name,
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    }
+                }
+
+                // Stroke Smoothing / Stabilizer (Smooth Line Art / Pixelation Fix)
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Smooth Line Art (Stabilizer)", color = TextSecondary, fontSize = 13.sp)
+                        Text("${(config.strokeSmoothing * 100).toInt()}%", color = Color(0xFF30B0C7), fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = config.strokeSmoothing,
+                        onValueChange = onUpdateSmoothing,
+                        valueRange = 0f..1f,
+                        colors = SliderDefaults.colors(thumbColor = Color(0xFF30B0C7), activeTrackColor = Color(0xFF30B0C7))
+                    )
+                }
+
                 // Size
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Size", color = TextSecondary, fontSize = 13.sp)
+                        Text("Brush Size", color = TextSecondary, fontSize = 13.sp)
                         Text("${config.size.toInt()} px", color = AccentPrimary, fontWeight = FontWeight.Bold)
                     }
                     Slider(
                         value = config.size,
                         onValueChange = onUpdateSize,
-                        valueRange = 1f..100f,
+                        valueRange = 1f..150f,
                         colors = SliderDefaults.colors(thumbColor = AccentPrimary, activeTrackColor = AccentPrimary)
                     )
                 }
@@ -1451,7 +1819,7 @@ fun BrushSettingsDialog(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Opacity", color = TextSecondary, fontSize = 13.sp)
+                        Text("Brush Opacity", color = TextSecondary, fontSize = 13.sp)
                         Text("${(config.opacity * 100).toInt()}%", color = AccentPrimary, fontWeight = FontWeight.Bold)
                     }
                     Slider(
@@ -1469,7 +1837,7 @@ fun BrushSettingsDialog(
                     colors = ButtonDefaults.buttonColors(containerColor = Color(config.color))
                 ) {
                     Text(
-                        text = "Change Brush Color",
+                        text = "Pro Color Palette & Wheel",
                         color = if (android.graphics.Color.luminance(config.color) > 0.5f) Color.Black else Color.White,
                         fontWeight = FontWeight.Bold
                     )
@@ -1485,33 +1853,72 @@ fun BrushSettingsDialog(
 }
 
 /**
- * Eraser Settings Dialog
+ * Eraser Settings Dialog (4-in-1 Controls)
  */
 @Composable
 fun EraserSettingsDialog(
-    eraserSize: Float,
+    config: BrushConfig,
     onDismiss: () -> Unit,
-    onUpdateSize: (Float) -> Unit
+    onUpdateSize: (Float) -> Unit,
+    onUpdateHardness: (Float) -> Unit,
+    onUpdateOpacity: (Float) -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = DarkSurface,
-        title = { Text("Eraser Settings", color = Color.White, fontWeight = FontWeight.Bold) },
+        title = { Text("Eraser Settings (4-in-1)", color = Color.White, fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Eraser Size", color = TextSecondary, fontSize = 13.sp)
-                    Text("${eraserSize.toInt()} px", color = AccentPrimary, fontWeight = FontWeight.Bold)
+                // Eraser Size
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Eraser Size", color = TextSecondary, fontSize = 13.sp)
+                        Text("${config.eraserSize.toInt()} px", color = AccentPrimary, fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = config.eraserSize,
+                        onValueChange = onUpdateSize,
+                        valueRange = 5f..150f,
+                        colors = SliderDefaults.colors(thumbColor = AccentPrimary, activeTrackColor = AccentPrimary)
+                    )
                 }
-                Slider(
-                    value = eraserSize,
-                    onValueChange = onUpdateSize,
-                    valueRange = 5f..150f,
-                    colors = SliderDefaults.colors(thumbColor = AccentPrimary, activeTrackColor = AccentPrimary)
-                )
+
+                // Sharpness / Hardness (Fade)
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Sharpness / Hardness", color = TextSecondary, fontSize = 13.sp)
+                        Text(if (config.eraserHardness < 0.35f) "Soft Fade" else if (config.eraserHardness > 0.8f) "Sharp Crisp" else "Medium", color = Color(0xFF30B0C7), fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = config.eraserHardness,
+                        onValueChange = onUpdateHardness,
+                        valueRange = 0.1f..1f,
+                        colors = SliderDefaults.colors(thumbColor = Color(0xFF30B0C7), activeTrackColor = Color(0xFF30B0C7))
+                    )
+                }
+
+                // Opacity
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Eraser Opacity", color = TextSecondary, fontSize = 13.sp)
+                        Text("${(config.eraserOpacity * 100).toInt()}%", color = AccentPrimary, fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = config.eraserOpacity,
+                        onValueChange = onUpdateOpacity,
+                        valueRange = 0.05f..1f,
+                        colors = SliderDefaults.colors(thumbColor = AccentPrimary, activeTrackColor = AccentPrimary)
+                    )
+                }
             }
         },
         confirmButton = {

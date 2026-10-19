@@ -9,6 +9,10 @@ enum class ToolType {
     AIRBRUSH,
     MARKER,
     CRAYON,
+    PIXEL,
+    CALLIGRAPHY,
+    LEAF_SCATTER,
+    CHARCOAL,
     ERASER,
     LASSO,
     FILL,
@@ -16,7 +20,15 @@ enum class ToolType {
     SMUDGE,
     BLUR,
     RULER,
+    MIRROR,
     EYEDROPPER
+}
+
+enum class MirrorMode {
+    NONE,
+    VERTICAL,
+    HORIZONTAL,
+    QUAD
 }
 
 enum class RulerType {
@@ -78,7 +90,13 @@ data class BrushConfig(
     val opacity: Float = 1.0f,
     val eraserSize: Float = 30f,
     val eraserOpacity: Float = 1.0f,
+    val eraserHardness: Float = 1.0f,
+    val strokeSmoothing: Float = 0.5f,
     val rulerType: RulerType = RulerType.NONE,
+    val rulerLockedToCanvas: Boolean = true,
+    val mirrorMode: MirrorMode = MirrorMode.NONE,
+    val mirrorAxisX: Float = 0.5f,
+    val mirrorAxisY: Float = 0.5f,
     val fillTolerance: Int = 32
 )
 
@@ -115,6 +133,8 @@ data class Project(
     val audioTracks: List<AudioTrack> = listOf(
         AudioTrack(id = 0, name = "Track 1")
     ),
+    val frameHolds: Map<Int, Int> = emptyMap(), // Frame index to hold duration in exposures (1 = normal)
+    val pasteboardMargin: Int = 300,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

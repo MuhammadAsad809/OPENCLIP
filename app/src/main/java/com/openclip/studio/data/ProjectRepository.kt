@@ -398,9 +398,16 @@ class ProjectRepository(private val context: Context) {
                     )
                 )
             }
-        }
-        if (audioTracks.isEmpty()) {
-            audioTracks.add(com.openclip.studio.core.model.AudioTrack(0, "Track 1"))
+        val frameHolds = mutableMapOf<Int, Int>()
+        val holdsObj = json.optJSONObject("frameHolds")
+        if (holdsObj != null) {
+            val keys = holdsObj.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                try {
+                    frameHolds[k.toInt()] = holdsObj.getInt(k)
+                } catch (e: Exception) {}
+            }
         }
 
         return Project(
@@ -414,6 +421,7 @@ class ProjectRepository(private val context: Context) {
             backgroundType = backgroundType,
             layers = layers,
             audioTracks = audioTracks,
+            frameHolds = frameHolds,
             createdAt = createdAt,
             updatedAt = updatedAt
         )
@@ -443,6 +451,12 @@ class ProjectRepository(private val context: Context) {
             layersArr.put(lObj)
         }
         json.put("layers", layersArr)
+
+        val holdsObj = JSONObject()
+        for ((idx, hold) in p.frameHolds) {
+            holdsObj.put(idx.toString(), hold)
+        }
+        json.put("frameHolds", holdsObj)
 
         val tracksArr = JSONArray()
         for (t in p.audioTracks) {
@@ -524,6 +538,18 @@ class ProjectRepository(private val context: Context) {
             } else track
         }
         val updated = project.copy(audioTracks = updatedTracks, updatedAt = System.currentTimeMillis())
+        saveProject(updated)
+        return updated
+    }
+
+    fun setFrameHold(project: Project, frameIndex: Int, holdDuration: Int): Project {
+        val updatedHolds = project.frameHolds.toMutableMap()
+        if (holdDuration <= 1) {
+            updatedHolds.remove(frameIndex)
+        } else {
+            updatedHolds[frameIndex] = holdDuration.coerceIn(1, 60)
+        }
+        val updated = project.copy(frameHolds = updatedHolds, updatedAt = System.currentTimeMillis())
         saveProject(updated)
         return updated
     }

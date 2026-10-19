@@ -9,6 +9,7 @@ import com.openclip.studio.core.export.ExportFormat
 import com.openclip.studio.core.export.ExportPipeline
 import com.openclip.studio.core.model.BrushConfig
 import com.openclip.studio.core.model.Layer
+import com.openclip.studio.core.model.MirrorMode
 import com.openclip.studio.core.model.OnionConfig
 import com.openclip.studio.core.model.Project
 import com.openclip.studio.core.model.RulerType
@@ -228,6 +229,27 @@ class EditorViewModel(
             _activeLayerId.value = updatedLayers.first().id
         }
         repository.saveProject(updated)
+    }
+
+    fun setMirrorMode(mode: MirrorMode) {
+        _brushConfig.value = _brushConfig.value.copy(mirrorMode = mode)
+    }
+
+    fun setStrokeSmoothing(smoothing: Float) {
+        _brushConfig.value = _brushConfig.value.copy(strokeSmoothing = smoothing.coerceIn(0f, 1f))
+    }
+
+    fun setEraserHardness(hardness: Float) {
+        _brushConfig.value = _brushConfig.value.copy(eraserHardness = hardness.coerceIn(0f, 1f))
+    }
+
+    fun setRulerLocked(locked: Boolean) {
+        _brushConfig.value = _brushConfig.value.copy(rulerLockedToCanvas = locked)
+    }
+
+    fun setFrameHold(frameIndex: Int, holdDuration: Int) {
+        val updated = repository.setFrameHold(_project.value, frameIndex, holdDuration)
+        _project.value = updated
     }
 
     fun updateProjectTitle(newTitle: String) {

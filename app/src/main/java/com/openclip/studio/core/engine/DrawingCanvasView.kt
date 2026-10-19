@@ -2,6 +2,7 @@ package com.openclip.studio.core.engine
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
@@ -22,6 +23,7 @@ import android.view.ScaleGestureDetector
 import android.view.View
 import com.openclip.studio.core.model.BackgroundType
 import com.openclip.studio.core.model.BrushConfig
+import com.openclip.studio.core.model.MirrorMode
 import com.openclip.studio.core.model.OnionConfig
 import com.openclip.studio.core.model.Project
 import com.openclip.studio.core.model.RulerType
@@ -74,6 +76,15 @@ class DrawingCanvasView @JvmOverloads constructor(
 
     // Live drawing path
     private val currentStrokePath = Path()
+    private val mirrorStrokePath = Path()
+    private val strokeStabilizer = StrokeStabilizer()
+    private val mirrorAxisPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFF3B69.toInt()
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f
+        pathEffect = DashPathEffect(floatArrayOf(12f, 8f), 0f)
+    }
+
     private var strokeStartX = 0f
     private var strokeStartY = 0f
     private var lastCanvasX = 0f
@@ -247,9 +258,20 @@ class DrawingCanvasView @JvmOverloads constructor(
                     strokeCap = Paint.Cap.ROUND
                 }
                 canvas.drawPath(currentStrokePath, previewEraser)
+                if (brushConfig.mirrorMode != MirrorMode.NONE) {
+                    canvas.drawPath(mirrorStrokePath, previewEraser)
+                }
             } else {
                 canvas.drawPath(currentStrokePath, strokePaint)
+                if (brushConfig.mirrorMode != MirrorMode.NONE) {
+                    canvas.drawPath(mirrorStrokePath, strokePaint)
+                }
             }
+        }
+
+        // Draw Mirror Symmetry Guideline
+        if (brushConfig.mirrorMode != MirrorMode.NONE) {
+            drawMirrorGuideline(canvas)
         }
 
         // 8. Draw active Ruler guide preview if using ruler
@@ -363,34 +385,136 @@ class DrawingCanvasView @JvmOverloads constructor(
         paint.alpha = (config.opacity.coerceIn(0f, 1f) * 255).toInt()
         paint.strokeWidth = config.size
         paint.xfermode = null
+        paint.maskFilter = null
+        paint.pathEffect = null
+        paint.isAntiAlias = true
 
         when (config.toolType) {
-            ToolType.PEN -> {
+            ToolType.PEN, ToolType.BRUSH -> {
                 paint.strokeCap = Paint.Cap.ROUND
                 paint.strokeJoin = Paint.Join.ROUND
             }
             ToolType.PENCIL -> {
                 paint.strokeCap = Paint.Cap.ROUND
-                paint.alpha = (config.opacity * 0.7f * 255).toInt()
+                paint.alpha = (config.opacity * 0.75f * 255).toInt()
             }
             ToolType.MARKER -> {
                 paint.strokeCap = Paint.Cap.SQUARE
-                paint.alpha = (config.opacity * 0.5f * 255).toInt()
+                paint.alpha = (config.opacity * 0.6f * 255).toInt()
             }
             ToolType.AIRBRUSH -> {
                 paint.strokeCap = Paint.Cap.ROUND
+                paint.strokeWidth = config.size * 2.2f
+                paint.alpha = (config.opacity * 0.2f * 255).toInt()
+                val blurR = (config.size * 0.6f).coerceAtLeast(1f)
+                paint.maskFilter = BlurMaskFilter(blurR, BlurMaskFilter.Blur.NORMAL)
+            }
+            ToolType.PIXEL -> {
+                paint.isAntiAlias = false
+                paint.strokeCap = Paint.Cap.SQUARE
+                paint.strokeJoin = Paint.Join.MITER
+                paint.strokeWidth = (config.size / 3f).coerceAtLeast(1f).toInt().toFloat()
+            }
+            ToolType.CALLIGRAPHY -> {
+                paint.strokeCap = Paint.Cap.BUTT
+                paint.strokeJoin = Paint.Join.BEVEL
                 paint.strokeWidth = config.size * 1.5f
-                paint.alpha = (config.opacity * 0.25f * 255).toInt()
+            }
+            ToolType.LEAF_SCATTER, ToolType.CHARCOAL -> {
+                paint.strokeCap = Paint.Cap.ROUND
+                paint.strokeWidth = config.size * 1.2f
+                paint.pathEffect = DashPathEffect(floatArrayOf(config.size * 0.8f, config.size * 0.4f), 0f)
             }
             ToolType.ERASER -> {
                 paint.strokeCap = Paint.Cap.ROUND
                 paint.strokeWidth = config.eraserSize
+                paint.alpha = (config.eraserOpacity.coerceIn(0f, 1f) * 255).toInt()
+                if (config.eraserHardness < 0.95f) {
+                    val blurR = (config.eraserSize * (1f - config.eraserHardness) * 0.4f).coerceAtLeast(1f)
+                    paint.maskFilter = BlurMaskFilter(blurR, BlurMaskFilter.Blur.NORMAL)
+                }
                 paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
             }
             else -> {
                 paint.strokeCap = Paint.Cap.ROUND
                 paint.strokeJoin = Paint.Join.ROUND
             }
+        }
+    }
+
+    private fun getMirroredPoint(x: Float, y: Float): PointF {
+        val axisX = canvasWidth * brushConfig.mirrorAxisX
+        val axisY = canvasHeight * brushConfig.mirrorAxisY
+        return when (brushConfig.mirrorMode) {
+            MirrorMode.VERTICAL -> PointF(2 * axisX - x, y)
+            MirrorMode.HORIZONTAL -> PointF(x, 2 * axisY - y)
+            MirrorMode.QUAD -> PointF(2 * axisX - x, 2 * axisY - y)
+            MirrorMode.NONE -> PointF(x, y)
+        }
+    }
+
+    private fun drawMirrorGuideline(canvas: Canvas) {
+        val axisX = canvasWidth * brushConfig.mirrorAxisX
+        val axisY = canvasHeight * brushConfig.mirrorAxisY
+        val centerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFF3B69.toInt() }
+
+        when (brushConfig.mirrorMode) {
+            MirrorMode.VERTICAL -> {
+                canvas.drawLine(axisX, 0f, axisX, canvasHeight.toFloat(), mirrorAxisPaint)
+                canvas.drawCircle(axisX, canvasHeight / 2f, 8f, centerPaint)
+            }
+            MirrorMode.HORIZONTAL -> {
+                canvas.drawLine(0f, axisY, canvasWidth.toFloat(), axisY, mirrorAxisPaint)
+                canvas.drawCircle(canvasWidth / 2f, axisY, 8f, centerPaint)
+            }
+            MirrorMode.QUAD -> {
+                canvas.drawLine(axisX, 0f, axisX, canvasHeight.toFloat(), mirrorAxisPaint)
+                canvas.drawLine(0f, axisY, canvasWidth.toFloat(), axisY, mirrorAxisPaint)
+                canvas.drawCircle(axisX, axisY, 8f, centerPaint)
+            }
+            MirrorMode.NONE -> {}
+        }
+    }
+
+    private fun applySmudge(ptX: Float, ptY: Float, prevX: Float, prevY: Float) {
+        val bmp = activeLayerBitmap ?: return
+        val radius = (brushConfig.size * 1.4f).toInt().coerceIn(4, 50)
+        val ix = ptX.toInt()
+        val iy = ptY.toInt()
+        val px = prevX.toInt()
+        val py = prevY.toInt()
+        if (px in 0 until bmp.width && py in 0 until bmp.height && ix in 0 until bmp.width && iy in 0 until bmp.height) {
+            val prevColor = bmp.getPixel(px, py)
+            if (Color.alpha(prevColor) > 10) {
+                val smudgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = prevColor
+                    alpha = (brushConfig.opacity * 130).toInt()
+                    maskFilter = BlurMaskFilter(radius.toFloat() / 2f, BlurMaskFilter.Blur.NORMAL)
+                }
+                val c = Canvas(bmp)
+                c.drawCircle(ptX, ptY, radius.toFloat(), smudgePaint)
+            }
+        }
+    }
+
+    private fun applyBlur(ptX: Float, ptY: Float) {
+        val bmp = activeLayerBitmap ?: return
+        val r = (brushConfig.size * 1.5f).toInt().coerceIn(6, 40)
+        val left = (ptX - r).toInt().coerceAtLeast(0)
+        val top = (ptY - r).toInt().coerceAtLeast(0)
+        val right = (ptX + r).toInt().coerceAtMost(bmp.width - 1)
+        val bottom = (ptY + r).toInt().coerceAtMost(bmp.height - 1)
+        val w = right - left
+        val h = bottom - top
+        if (w > 3 && h > 3) {
+            val sub = Bitmap.createBitmap(bmp, left, top, w, h)
+            val small = Bitmap.createScaledBitmap(sub, (w / 3).coerceAtLeast(1), (h / 3).coerceAtLeast(1), true)
+            val blurred = Bitmap.createScaledBitmap(small, w, h, true)
+            val c = Canvas(bmp)
+            c.drawBitmap(blurred, left.toFloat(), top.toFloat(), null)
+            sub.recycle()
+            small.recycle()
+            blurred.recycle()
         }
     }
 
@@ -423,8 +547,17 @@ class DrawingCanvasView @JvmOverloads constructor(
                 strokeStartY = cy
                 lastCanvasX = cx
                 lastCanvasY = cy
+
+                strokeStabilizer.reset()
+                val pt = strokeStabilizer.filterPoint(cx, cy, brushConfig.strokeSmoothing)
                 currentStrokePath.reset()
-                currentStrokePath.moveTo(cx, cy)
+                currentStrokePath.moveTo(pt.x, pt.y)
+
+                if (brushConfig.mirrorMode != MirrorMode.NONE) {
+                    val mPt = getMirroredPoint(pt.x, pt.y)
+                    mirrorStrokePath.reset()
+                    mirrorStrokePath.moveTo(mPt.x, mPt.y)
+                }
 
                 if (brushConfig.toolType == ToolType.LASSO) {
                     lassoPath.reset()
@@ -433,6 +566,10 @@ class DrawingCanvasView @JvmOverloads constructor(
                     handleEyedropper(cx, cy)
                 } else if (brushConfig.toolType == ToolType.FILL) {
                     handleFloodFill(cx, cy)
+                } else if (brushConfig.toolType == ToolType.SMUDGE) {
+                    applySmudge(cx, cy, cx, cy)
+                } else if (brushConfig.toolType == ToolType.BLUR) {
+                    applyBlur(cx, cy)
                 }
                 invalidate()
             }
@@ -442,11 +579,19 @@ class DrawingCanvasView @JvmOverloads constructor(
 
                 if (brushConfig.toolType == ToolType.LASSO) {
                     lassoPath.lineTo(cx, cy)
+                } else if (brushConfig.toolType == ToolType.SMUDGE) {
+                    applySmudge(cx, cy, lastCanvasX, lastCanvasY)
+                } else if (brushConfig.toolType == ToolType.BLUR) {
+                    applyBlur(cx, cy)
                 } else if (brushConfig.toolType != ToolType.FILL && brushConfig.toolType != ToolType.EYEDROPPER && brushConfig.toolType != ToolType.RULER) {
-                    // Quadratic Bézier smoothing
-                    val midX = (lastCanvasX + cx) / 2f
-                    val midY = (lastCanvasY + cy) / 2f
-                    currentStrokePath.quadTo(lastCanvasX, lastCanvasY, midX, midY)
+                    val pt = strokeStabilizer.filterPoint(cx, cy, brushConfig.strokeSmoothing)
+                    strokeStabilizer.appendSmoothSegment(currentStrokePath, PointF(lastCanvasX, lastCanvasY), pt)
+
+                    if (brushConfig.mirrorMode != MirrorMode.NONE) {
+                        val prevM = getMirroredPoint(lastCanvasX, lastCanvasY)
+                        val curM = getMirroredPoint(pt.x, pt.y)
+                        strokeStabilizer.appendSmoothSegment(mirrorStrokePath, prevM, curM)
+                    }
                 }
 
                 lastCanvasX = cx
@@ -463,11 +608,12 @@ class DrawingCanvasView @JvmOverloads constructor(
                         }
                     } else if (brushConfig.toolType == ToolType.RULER) {
                         commitRulerStroke(strokeStartX, strokeStartY, cx, cy)
-                    } else if (brushConfig.toolType != ToolType.FILL && brushConfig.toolType != ToolType.EYEDROPPER) {
+                    } else if (brushConfig.toolType != ToolType.FILL && brushConfig.toolType != ToolType.EYEDROPPER && brushConfig.toolType != ToolType.SMUDGE && brushConfig.toolType != ToolType.BLUR) {
                         commitFreehandStroke()
                     }
                     isDrawing = false
                     currentStrokePath.reset()
+                    mirrorStrokePath.reset()
                     invalidate()
                     onStrokeFinished?.invoke()
                 }
@@ -482,6 +628,9 @@ class DrawingCanvasView @JvmOverloads constructor(
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         setupStrokePaint(paint, brushConfig)
         canvas.drawPath(currentStrokePath, paint)
+        if (brushConfig.mirrorMode != MirrorMode.NONE) {
+            canvas.drawPath(mirrorStrokePath, paint)
+        }
     }
 
     private fun commitRulerStroke(x1: Float, y1: Float, x2: Float, y2: Float) {
@@ -544,6 +693,46 @@ class DrawingCanvasView @JvmOverloads constructor(
 
     fun discardLassoSelection() {
         currentLassoSelection = null
+        invalidate()
+    }
+
+    fun flipLassoHorizontal() {
+        currentLassoSelection?.let { LassoEngine.flipHorizontal(it) }
+        invalidate()
+    }
+
+    fun flipLassoVertical() {
+        currentLassoSelection?.let { LassoEngine.flipVertical(it) }
+        invalidate()
+    }
+
+    fun duplicateLassoSelection() {
+        val bmp = activeLayerBitmap ?: return
+        currentLassoSelection?.let { sel ->
+            LassoEngine.duplicateSelection(bmp, sel)
+            sel.transformMatrix.postTranslate(30f, 30f)
+            invalidate()
+            onStrokeFinished?.invoke()
+        }
+    }
+
+    fun deleteLassoSelection() {
+        currentLassoSelection?.let { sel ->
+            LassoEngine.deleteSelection(sel)
+            currentLassoSelection = null
+            invalidate()
+            onStrokeFinished?.invoke()
+        }
+    }
+
+    fun applyLassoPerspective(skewX: Float = 0.2f, skewY: Float = 0.05f) {
+        val sel = currentLassoSelection ?: return
+        val bmp = sel.selectedBitmap ?: return
+        val w = bmp.width.toFloat()
+        val h = bmp.height.toFloat()
+        val src = floatArrayOf(0f, 0f, w, 0f, w, h, 0f, h)
+        val dst = floatArrayOf(w * skewX, 0f, w * (1f - skewX), 0f, w, h, 0f, h)
+        LassoEngine.applyPerspective(sel, src, dst)
         invalidate()
     }
 }

@@ -76,13 +76,31 @@ object LassoEngine {
 
     fun flipHorizontal(selection: LassoSelection) {
         val bmp = selection.selectedBitmap ?: return
-        val centerX = selection.bounds.centerX()
-        val centerY = selection.bounds.centerY()
         selection.transformMatrix.preScale(-1f, 1f, bmp.width / 2f, bmp.height / 2f)
     }
 
     fun flipVertical(selection: LassoSelection) {
         val bmp = selection.selectedBitmap ?: return
         selection.transformMatrix.preScale(1f, -1f, bmp.width / 2f, bmp.height / 2f)
+    }
+
+    fun duplicateSelection(targetBitmap: Bitmap, selection: LassoSelection) {
+        val bmp = selection.selectedBitmap ?: return
+        val canvas = Canvas(targetBitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        canvas.drawBitmap(bmp, selection.transformMatrix, paint)
+        // Keep selection floating so user can move the duplicated copy again
+    }
+
+    fun deleteSelection(selection: LassoSelection) {
+        selection.selectedBitmap = null
+        selection.isFloating = false
+    }
+
+    fun applyPerspective(selection: LassoSelection, srcCorners: FloatArray, dstCorners: FloatArray) {
+        val matrix = Matrix()
+        if (matrix.setPolyToPoly(srcCorners, 0, dstCorners, 0, 4)) {
+            selection.transformMatrix.postConcat(matrix)
+        }
     }
 }
