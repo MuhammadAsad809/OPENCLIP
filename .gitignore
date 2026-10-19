@@ -16,3 +16,6 @@ __pycache__/
 analysis/dex/
 analysis/extracted/
 analysis/jadx_out/
+build_out/
+analysis/jadx_res/
+

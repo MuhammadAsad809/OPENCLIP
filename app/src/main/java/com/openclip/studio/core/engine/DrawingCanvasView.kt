@@ -130,7 +130,7 @@ class DrawingCanvasView @JvmOverloads constructor(
     }
 
     private val lassoOverlayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFFFF5722.toInt()
+        color = 0xFFFF3B69.toInt()
         style = Paint.Style.STROKE
         strokeWidth = 3f
         pathEffect = DashPathEffect(floatArrayOf(12f, 8f), 0f)

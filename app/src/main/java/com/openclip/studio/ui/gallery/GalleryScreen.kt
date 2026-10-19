@@ -3,41 +3,41 @@ package com.openclip.studio.ui.gallery
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.openclip.studio.R
 import com.openclip.studio.core.model.BackgroundType
 import com.openclip.studio.core.model.CanvasPreset
 import com.openclip.studio.core.model.Project
 import com.openclip.studio.data.ProjectRepository
-import com.openclip.studio.ui.theme.AccentPrimary
-import com.openclip.studio.ui.theme.DarkBorder
-import com.openclip.studio.ui.theme.DarkSurface
-import com.openclip.studio.ui.theme.DarkSurfaceVariant
-import com.openclip.studio.ui.theme.TextPrimary
-import com.openclip.studio.ui.theme.TextSecondary
+import com.openclip.studio.ui.theme.*
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -55,31 +55,32 @@ fun GalleryScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Icons.Default.Movie,
+                            painter = painterResource(id = R.drawable.ic_stage_studio),
                             contentDescription = null,
                             tint = AccentPrimary,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(26.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
-                            Text("OpenClip", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = TextPrimary)
-                            Text("100% Free Animation Studio", fontSize = 11.sp, color = AccentPrimary)
+                            Text("OpenClip Studio", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = TextPrimary)
+                            Text("100% Free Animation", fontSize = 11.sp, color = AccentPrimary)
                         }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkSurface)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkBackground)
             )
         },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { showCreateDialog = true },
                 containerColor = AccentPrimary,
-                contentColor = Color.White
+                contentColor = Color.White,
+                shape = CircleShape
             ) {
-                Icon(Icons.Default.Add, contentDescription = "New Project")
+                Icon(Icons.Default.Add, contentDescription = "New Project", modifier = Modifier.size(28.dp))
             }
         },
-        containerColor = MaterialTheme.colorScheme.background
+        containerColor = DarkBackground
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (projects.isEmpty()) {
@@ -89,20 +90,20 @@ fun GalleryScreen(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            imageVector = Icons.Default.Movie,
+                            painter = painterResource(id = R.drawable.ic_stage_studio),
                             contentDescription = null,
-                            tint = Color.Gray,
+                            tint = TextTertiary,
                             modifier = Modifier.size(64.dp)
                         )
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text("No projects yet", fontSize = 18.sp, color = TextSecondary)
+                        Text("No projects yet", fontSize = 18.sp, color = TextSecondary, fontWeight = FontWeight.SemiBold)
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text("Tap + to start your 2D animation", fontSize = 14.sp, color = Color.Gray)
+                        Text("Tap + to create your first animation", fontSize = 14.sp, color = TextTertiary)
                     }
                 }
             } else {
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 170.dp),
+                    columns = GridCells.Adaptive(minSize = 160.dp),
                     contentPadding = PaddingValues(16.dp),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -157,53 +158,44 @@ fun ProjectCard(
     onDelete: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    val thumbFile = remember(project.id, project.updatedAt) {
-        repository.getProjectCoverThumbnailFile(project.id)
-    }
-    val thumbnailBitmap = remember(thumbFile) {
-        if (thumbFile.exists()) {
-            BitmapFactory.decodeFile(thumbFile.absolutePath)
-        } else null
+
+    val thumbBmp = remember(project.id, project.updatedAt) {
+        val f = repository.getFrameThumbnailFile(project.id, 0)
+        if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
     }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable { onClick() },
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
-        shape = RoundedCornerShape(12.dp),
-        border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DarkBorder))
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(110.dp)
-                    .background(DarkSurfaceVariant),
-                contentAlignment = Alignment.Center
+                    .aspectRatio(16f / 9f)
+                    .background(Color.White)
             ) {
-                if (thumbnailBitmap != null) {
+                if (thumbBmp != null) {
                     Image(
-                        bitmap = thumbnailBitmap.asImageBitmap(),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
+                        bitmap = thumbBmp.asImageBitmap(),
+                        contentDescription = project.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit
                     )
                 } else {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        tint = Color.Gray,
-                        modifier = Modifier.size(36.dp)
-                    )
+                    Box(modifier = Modifier.fillMaxSize().background(Color.White))
                 }
-                // FPS badge
+
+                // FPS Pill
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(6.dp)
-                        .background(Color(0xCC000000), RoundedCornerShape(4.dp))
+                        .background(Color(0xCC1E1E22), RoundedCornerShape(6.dp))
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text("${project.fps} FPS", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
@@ -213,7 +205,7 @@ fun ProjectCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -229,13 +221,13 @@ fun ProjectCard(
                     Text(
                         text = "${project.frameCount} frames • ${project.canvasWidth}x${project.canvasHeight}",
                         fontSize = 11.sp,
-                        color = TextSecondary
+                        color = TextTertiary
                     )
                 }
 
                 Box {
                     IconButton(onClick = { menuExpanded = true }, modifier = Modifier.size(24.dp)) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Options", tint = TextSecondary)
+                        Icon(Icons.Default.MoreVert, contentDescription = "Options", tint = TextTertiary)
                     }
                     DropdownMenu(
                         expanded = menuExpanded,
@@ -247,7 +239,7 @@ fun ProjectCard(
                             onClick = { menuExpanded = false; onDuplicate() }
                         )
                         DropdownMenuItem(
-                            text = { Text("Delete", color = Color.Red) },
+                            text = { Text("Delete", color = Color(0xFFFF453A)) },
                             onClick = { menuExpanded = false; onDelete() }
                         )
                     }
@@ -257,146 +249,354 @@ fun ProjectCard(
     }
 }
 
+/**
+ * Pixel-perfect recreation of FlipaClip 5.0.2 "New project" creation screen
+ * Reference: media_1792380169223.png
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreateProjectDialog(
     onDismiss: () -> Unit,
     onCreate: (title: String, preset: CanvasPreset, fps: Int, bgType: BackgroundType, bgColor: Int) -> Unit
 ) {
-    var title by remember { mutableStateOf("Animation #${(100..999).random()}") }
-    var selectedPreset by remember { mutableStateOf(CanvasPreset.DEFAULT) }
-    var fps by remember { mutableStateOf(12f) }
+    var title by remember { mutableStateOf("Name your animation") }
+    var selectedPreset by remember { mutableStateOf(CanvasPreset.DEFAULT) } // YouTube 720p
+    var fps by remember { mutableStateOf(12) }
     var bgType by remember { mutableStateOf(BackgroundType.SOLID) }
     var bgColor by remember { mutableStateOf(android.graphics.Color.WHITE) }
-    var presetMenuExpanded by remember { mutableStateOf(false) }
 
-    AlertDialog(
+    var showPresetSheet by remember { mutableStateOf(false) }
+    var showFpsSheet by remember { mutableStateOf(false) }
+
+    Dialog(
         onDismissRequest = onDismiss,
-        title = { Text("New Animation Project", color = TextPrimary, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("Project Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary,
-                        focusedBorderColor = AccentPrimary
-                    )
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = Color(0xFF202022)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 24.dp, vertical = 16.dp)
+            ) {
+                // Top Close button (X)
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .size(36.dp)
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_stage_close),
+                            contentDescription = "Close",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // SECTION 1: Project name
+                Text(
+                    text = "Project name",
+                    color = AccentPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
                 )
 
-                // Canvas Preset selector
-                Column {
-                    Text("Canvas Size & Ratio", fontSize = 13.sp, color = TextSecondary)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Box(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(
-                            onClick = { presetMenuExpanded = true },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Underlined project name input
+                BasicTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    textStyle = TextStyle(
+                        color = Color.White,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    cursorBrush = SolidColor(AccentPrimary),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Coral Underline
+                Spacer(modifier = Modifier.height(6.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp)
+                        .background(AccentPrimary)
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // SECTION 2: Choose background
+                Text(
+                    text = "Choose background",
+                    color = AccentPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Background Preview Card with floating bottom 4-button pill
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(210.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(
+                            when (bgType) {
+                                BackgroundType.SOLID -> Color(bgColor)
+                                BackgroundType.PAPER_WHITE -> Color(0xFFFAF9F6)
+                                BackgroundType.PAPER_VINTAGE -> Color(0xFFF4EAD4)
+                                BackgroundType.PAPER_GRID -> Color(0xFFF5F5F7)
+                                BackgroundType.TRANSPARENT -> Color.White
+                            }
+                        )
+                ) {
+                    // Floating 4-button pill
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 14.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        color = Color(0xFF1E1E22),
+                        tonalElevation = 6.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("${selectedPreset.name} (${selectedPreset.aspectRatioLabel})")
-                        }
-                        DropdownMenu(
-                            expanded = presetMenuExpanded,
-                            onDismissRequest = { presetMenuExpanded = false },
-                            modifier = Modifier.background(DarkSurface)
-                        ) {
-                            CanvasPreset.ALL.forEach { p ->
-                                DropdownMenuItem(
-                                    text = { Text("${p.name} (${p.width}x${p.height})", color = TextPrimary) },
-                                    onClick = {
-                                        selectedPreset = p
-                                        presetMenuExpanded = false
+                            IconButton(
+                                onClick = {
+                                    bgType = when (bgType) {
+                                        BackgroundType.SOLID -> BackgroundType.PAPER_WHITE
+                                        BackgroundType.PAPER_WHITE -> BackgroundType.PAPER_GRID
+                                        BackgroundType.PAPER_GRID -> BackgroundType.PAPER_VINTAGE
+                                        BackgroundType.PAPER_VINTAGE -> BackgroundType.SOLID
+                                        BackgroundType.TRANSPARENT -> BackgroundType.SOLID
                                     }
+                                },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_bg_preset),
+                                    contentDescription = "Presets",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    bgColor = if (bgColor == android.graphics.Color.WHITE) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+                                    bgType = BackgroundType.SOLID
+                                },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_bg_color),
+                                    contentDescription = "Color",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { /* Gallery import stub */ },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_bg_import),
+                                    contentDescription = "Gallery",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { /* Camera background stub */ },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_bg_camera),
+                                    contentDescription = "Camera",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
                     }
                 }
 
-                // FPS Slider
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Frame Rate", fontSize = 13.sp, color = TextSecondary)
-                        Text("${fps.toInt()} FPS", fontSize = 13.sp, color = AccentPrimary, fontWeight = FontWeight.Bold)
-                    }
-                    Slider(
-                        value = fps,
-                        onValueChange = { fps = it },
-                        valueRange = 1f..30f,
-                        steps = 28,
-                        colors = SliderDefaults.colors(
-                            thumbColor = AccentPrimary,
-                            activeTrackColor = AccentPrimary
-                        )
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // SECTION 3: Format
+                Text(
+                    text = "Format",
+                    color = AccentPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Row: Choose canvas size -> YouTube (720p)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showPresetSheet = true }
+                        .padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Choose canvas size",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = selectedPreset.name,
+                        color = AccentPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
 
-                // Background Type selector
-                Column {
-                    Text("Background Canvas", fontSize = 13.sp, color = TextSecondary)
-                    Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Row: Choose frames per second -> 12 FPS
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showFpsSheet = true }
+                        .padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Choose frames per second",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = "$fps FPS",
+                        color = AccentPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                // BIG PILL: CREATE PROJECT
+                val isValid = title.trim().isNotEmpty()
+                Button(
+                    onClick = {
+                        if (isValid) {
+                            onCreate(title.trim(), selectedPreset, fps, bgType, bgColor)
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp),
+                    shape = RoundedCornerShape(27.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isValid) AccentPrimary else AccentMutedRed,
+                        contentColor = if (isValid) Color.White else TextTertiary
+                    ),
+                    enabled = isValid
+                ) {
+                    Text(
+                        text = "CREATE PROJECT",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
+
+    // Canvas Size Selection Sheet
+    if (showPresetSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showPresetSheet = false },
+            containerColor = Color(0xFF28282C),
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Text("Select Canvas Size", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Spacer(modifier = Modifier.height(12.dp))
+                CanvasPreset.ALL.forEach { preset ->
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selectedPreset = preset
+                                showPresetSheet = false
+                            }
+                            .padding(vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        BackgroundOptionChip("White", bgType == BackgroundType.SOLID && bgColor == android.graphics.Color.WHITE) {
-                            bgType = BackgroundType.SOLID
-                            bgColor = android.graphics.Color.WHITE
-                        }
-                        BackgroundOptionChip("Dark", bgType == BackgroundType.SOLID && bgColor == android.graphics.Color.BLACK) {
-                            bgType = BackgroundType.SOLID
-                            bgColor = android.graphics.Color.BLACK
-                        }
-                        BackgroundOptionChip("Grid", bgType == BackgroundType.PAPER_GRID) {
-                            bgType = BackgroundType.PAPER_GRID
-                        }
-                        BackgroundOptionChip("Vintage", bgType == BackgroundType.PAPER_VINTAGE) {
-                            bgType = BackgroundType.PAPER_VINTAGE
-                        }
+                        Text(preset.name, color = Color.White, fontSize = 16.sp)
+                        Text("${preset.width}x${preset.height} (${preset.aspectRatioLabel})", color = AccentPrimary, fontSize = 14.sp)
                     }
+                    HorizontalDivider(color = Color(0xFF383840))
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    if (title.isNotBlank()) {
-                        onCreate(title, selectedPreset, fps.toInt(), bgType, bgColor)
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary)
-            ) {
-                Text("Create")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel", color = TextSecondary)
-            }
-        },
-        containerColor = DarkSurface
-    )
-}
+        }
+    }
 
-@Composable
-private fun BackgroundOptionChip(label: String, isSelected: Boolean, onClick: () -> Unit) {
-    FilterChip(
-        selected = isSelected,
-        onClick = onClick,
-        label = { Text(label, fontSize = 12.sp) },
-        colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = AccentPrimary,
-            selectedLabelColor = Color.White,
-            containerColor = DarkSurfaceVariant,
-            labelColor = TextPrimary
-        )
-    )
+    // FPS Selection Sheet
+    if (showFpsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showFpsSheet = false },
+            containerColor = Color(0xFF28282C),
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+        ) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Select Frame Rate", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text("$fps FPS", color = AccentPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Slider(
+                    value = fps.toFloat(),
+                    onValueChange = { fps = it.toInt() },
+                    valueRange = 1f..30f,
+                    steps = 28,
+                    colors = SliderDefaults.colors(
+                        thumbColor = AccentPrimary,
+                        activeTrackColor = AccentPrimary,
+                        inactiveTrackColor = Color(0xFF383840)
+                    )
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = { showFpsSheet = false },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary)
+                ) {
+                    Text("Done", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
 }

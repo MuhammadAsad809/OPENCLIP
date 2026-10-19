@@ -12,6 +12,9 @@ enum class ToolType {
     ERASER,
     LASSO,
     FILL,
+    TEXT,
+    SMUDGE,
+    BLUR,
     RULER,
     EYEDROPPER
 }
